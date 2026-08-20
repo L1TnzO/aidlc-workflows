@@ -65,6 +65,8 @@ Load aidlc-product-agent persona from `agents/aidlc-product-agent.md` and knowle
 
 - If brownfield: Read RE artifacts from `aidlc/spaces/<active-space>/codekb/<repo>/` (the directory `codekb-path --repo <repo>` prints)
 - Read user's project description from `<record>/audit/<host>-<clone>.md`
+- If the user request references an existing document or file, read it and
+  treat it as primary input for the requirements analysis.
 
 ### Step 3: Analyze User Request
 

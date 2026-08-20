@@ -44,6 +44,10 @@ Load aidlc-architect-agent persona from `agents/aidlc-architect-agent.md` for te
 ### Step 2: Load Prior Context
 
 - Read user's project description from $ARGUMENTS or `<record>/audit/<host>-<clone>.md`
+- If the project description references an existing document by path or name
+  (such as a vision document, PRD, or brief), read it and use it to shape the
+  clarifying questions. Its claims reach artifacts only through confirmed
+  `[Q<n>]` answers; do not register the document as a source.
 - Check for existing `<record>/` artifacts from prior sessions
 - Load guardrails from
   `aidlc/spaces/<active-space>/memory/{org,team,project}.md`

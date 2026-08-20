@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.20] - 2026-08-20
+
+Existing vision documents, PRDs, requirements briefs, and other referenced files now feed the workflow directly: Intent Capture reads them to shape grounded questions, Requirements Analysis treats them as primary input, and the guide explains both direct references and durable DocumentKB onboarding. **Upgrade:** refresh your `dist/<harness>/` shell so the updated stage instructions are installed.
+
+* Reference an existing file in the initial request, such as `/aidlc Read ./vision.md and build what it describes`, or paste its content; no mandatory input location is required.
+* Intent Capture uses referenced documents to shape clarifying questions while admitting their claims to artifacts only through confirmed `[Q<n>]` answers, preserving the existing Sources register contract.
+* Requirements Analysis reads a document or file referenced by the user request and treats it as primary requirements input.
+* For durable, citable access across intents, place documents under `aidlc/spaces/<space>/knowledge/documents/` and run `/aidlc knowledge onboard`.
+
 ## [2.6.18] - 2026-08-19
 
 Classic and Express are new scope options, and the implicit default scope is now Classic — a **declared behavior change**: invocations that name no scope and match no keyword now run the v1-style lifecycle without Ideation instead of the full-lifecycle Feature scope. Exactly two things control the implicit default: the `AWS_AIDLC_DEFAULT_SCOPE` env var (which overrides) and the framework's hard-coded `classic` fallback. Express has a deterministic requirements-to-conditional-deploy path, and conditional protocol modules reduce fixed context without dropping reviewer recovery behavior. **Upgrade:** refresh your `dist/<harness>/` shell; in-flight workflows keep their persisted scope and need no migration; set `AWS_AIDLC_DEFAULT_SCOPE=feature` (Claude: the `.claude/settings.json` `env` block, which now ships `classic`) to keep the previous full-lifecycle default.
