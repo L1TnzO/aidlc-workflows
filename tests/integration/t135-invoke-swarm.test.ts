@@ -232,6 +232,8 @@ function seedRefereeProject(): string {
       "",
     ].join("\n"),
   );
+  spawnSync("git", ["config", "user.email", "t@t"], { cwd: proj });
+  spawnSync("git", ["config", "user.name", "t"], { cwd: proj });
   spawnSync("git", ["add", "-A"], { cwd: proj });
   spawnSync(
     "git",
@@ -728,7 +730,7 @@ describe("t135 referee - autonomous reviewer receipt is a finalize precondition"
 
   test("12: a NOT-READY receipt at the configured cap satisfies swarm finalize", () => {
     const result = finalizeWithNotReady(2);
-    expect(result.status).toBe(0);
+    expect(result.status, result.out).toBe(0);
     expect(result.out).toContain('"converged": 1');
     expect(result.out).toContain('"failed": 0');
   }, 60000);

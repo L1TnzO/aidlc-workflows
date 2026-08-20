@@ -3361,12 +3361,13 @@ function isAutonomousSwarmCandidate(
   return true;
 }
 
-// Report-side exemption for disk-backed approval guards. Swarm artifacts and
-// collaborator contributions stay in Bolt worktrees, so the main checkout
-// cannot prove them from disk. The audit ledger can: exemption is granted only
-// after EVERY unit in a valid DAG has a current-run convergence row. An active,
-// partially-converged swarm must refuse a stray report --approved, otherwise the
-// state transition would complete the whole stage and skip later batches.
+// Report-side exemption for disk-backed approval guards. Finalize integrates
+// each swarm unit into its selected base checkout, but the current project
+// record cannot prove sibling-repo contributions or bind files to this exact
+// stage attempt. The audit ledger can: exemption is granted only after EVERY
+// unit in a valid DAG has a current-run convergence row. An active, partially-
+// converged swarm must refuse a stray report --approved, otherwise the state
+// transition would complete the whole stage and skip later batches.
 // Malformed/absent DAGs fail closed because the expected unit set is unknowable.
 function isSettledAutonomousSwarm(
   node: GraphStage,
@@ -3410,17 +3411,18 @@ function applySettledSwarmShape(
 // units has converged, so the run climbs the DAG batch by batch instead of
 // re-emitting batch 1 forever. The completion signal is the audit ledger
 // (swarmConvergedUnits, the `SWARM_UNIT_CONVERGED` rows the referee writes back
-// to the main checkout), NOT artifact presence: a swarm unit's produced files
-// stay in its Bolt worktree, so the inline per-unit disk-coverage ledger never
-// sees them (that is why this path owns its own signal).
+// to the main checkout), NOT artifact presence: finalized files can land in a
+// selected sibling repo, and disk coverage does not carry the stage-attempt
+// identity needed for safe resume (that is why this path owns its own signal).
 //
 // When EVERY unit in EVERY batch has converged, the stage is built: the engine
 // emits the stage's settle directive (a run-stage for the last unit carrying the
 // stage's computed gate, the SAME shape emitPerUnitRunStage's all-covered
 // re-entry produces) so the conductor completes the stage and the workflow moves
 // on, and returns true. It does NOT return false there: the caller's fallback
-// (emitPerUnitRunStage) keys on disk coverage the swarm never lands in the main
-// tree, so it would wrongly re-run unit one inline instead of settling.
+// (emitPerUnitRunStage) keys on project-record disk coverage that cannot
+// represent every swarm target, so it could wrongly re-run unit one inline
+// instead of settling.
 //
 // On any trigger miss it returns false and emits nothing, so the caller falls
 // back to the normal run-stage emit (which keeps its computed gate, including the

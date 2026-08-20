@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-worktree:create, subcommand:aidlc-worktree:merge, subcommand:aidlc-swarm:prepare, function:resolveConstructionRepo, function:repoDir, function:intentRepos
+// covers: subcommand:aidlc-worktree:create, subcommand:aidlc-worktree:merge, subcommand:aidlc-swarm:prepare, subcommand:aidlc-swarm:finalize, function:resolveConstructionRepo, function:repoDir, function:intentRepos
 //
 // Mechanism: cli (spawned dist tools) + real git. P7 — multi-repo construction:
 // `aidlc-worktree create/merge` thread `--repo <name>` so `git worktree add` and
@@ -29,6 +29,10 @@ import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { AIDLC_SRC, cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
+import {
+  readStateFile,
+  writeStateFile,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath;
 const UTIL = join(AIDLC_SRC, "tools", "aidlc-utility.ts");
@@ -274,6 +278,60 @@ describe("t166 P7 multi-repo construction — --repo anchors the worktree to the
       expect(existsSync(worktreeDir(proj, "orphanunit"))).toBe(false);
       expect(hasBoltBranch(proj, "repo-a", "orphanunit")).toBe(false);
       expect(hasBoltBranch(proj, "repo-b", "orphanunit")).toBe(false);
+    });
+  });
+
+  describe("M1 multi-repo: swarm finalize --repo merges work into the target sibling", () => {
+    const proj = freshWorkspace();
+    const repoA = makeSiblingRepo(proj, "repo-a");
+    makeSiblingRepo(proj, "repo-b");
+    runUtil(proj, "intent-create", "--scope", "feature", "--repos", "repo-a,repo-b");
+    writeStateFile(
+      proj,
+      readStateFile(proj).replace(
+        /^- \*\*Current Stage\*\*:.*$/m,
+        "- **Current Stage**: workspace-detection",
+      ),
+    );
+    const prepared = runSwarm(
+      proj,
+      "prepare",
+      "--batch",
+      "1",
+      "--units",
+      "mergedunit",
+      "--base",
+      "main",
+      "--repo",
+      "repo-a",
+    );
+    const wt = worktreeDir(proj, "mergedunit");
+    if (prepared.status === 0) writeFileSync(join(wt, "feature.txt"), "unit work\n");
+    const finalized = runSwarm(
+      proj,
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "mergedunit",
+      "--claimed",
+      "mergedunit",
+      "--check-cmd",
+      "test -f feature.txt",
+      "--repo",
+      "repo-a",
+    );
+
+    test("finalize --repo repo-a exits 0 and lands the Unit file on main", () => {
+      expect(prepared.status).toBe(0);
+      expect(finalized.status, finalized.out).toBe(0);
+      expect(existsSync(join(repoA, "feature.txt"))).toBe(true);
+      expect(git(repoA, "cat-file", "-e", "HEAD:feature.txt").status).toBe(0);
+    });
+    test("successful finalize removes the worktree and Bolt branch", () => {
+      expect(existsSync(wt)).toBe(false);
+      expect(hasBoltBranch(proj, "repo-a", "mergedunit")).toBe(false);
+      expect(hasBoltBranch(proj, "repo-b", "mergedunit")).toBe(false);
     });
   });
 });

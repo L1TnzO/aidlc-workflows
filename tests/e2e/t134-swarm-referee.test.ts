@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-swarm:prepare, subcommand:aidlc-swarm:check, subcommand:aidlc-swarm:finalize, function:boltSlugForUnit, audit:SWARM_STARTED, audit:SWARM_DEGRADED, audit:SWARM_UNIT_CONVERGED, audit:SWARM_UNIT_FAILED, audit:SWARM_BATON_RETURNED, audit:SWARM_COMPLETED
+// covers: subcommand:aidlc-swarm:prepare, subcommand:aidlc-swarm:check, subcommand:aidlc-swarm:finalize, function:boltSlugForUnit, audit:WORKTREE_MERGED, audit:SWARM_STARTED, audit:SWARM_DEGRADED, audit:SWARM_UNIT_CONVERGED, audit:SWARM_UNIT_FAILED, audit:SWARM_BATON_RETURNED, audit:SWARM_COMPLETED
 //
 // CLI-contract port of tests/e2e/t134-swarm-referee.sh (TAP plan 13),
 // mechanism = cli. The .sh exercises aidlc-swarm.ts — the STATELESS convergence
@@ -79,11 +79,10 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   AIDLC_SRC,
-  DEFAULT_RECORD_DIR,
   FIXTURES_DIR,
   cleanupWorktreeFixture,
   seedBoltDag,
@@ -96,6 +95,9 @@ import {
 import {
   artifactFilename,
   boltSlugForUnit,
+  getField,
+  parseRefsList,
+  readStateFile,
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 const BUN = process.execPath;
@@ -143,6 +145,8 @@ function makeSwarmFixture(): string {
   const git = (args: string[]): void => {
     spawnSync("git", args, { cwd: proj, encoding: "utf-8" });
   };
+  git(["config", "user.email", "t@t"]);
+  git(["config", "user.name", "t"]);
   git(["add", "-A"]);
   git([
     "-c",
@@ -155,6 +159,14 @@ function makeSwarmFixture(): string {
     "--no-edit",
   ]);
   return proj;
+}
+
+function git(proj: string, args: string[]): { rc: number; out: string } {
+  const result = spawnSync("git", args, { cwd: proj, encoding: "utf-8" });
+  return {
+    rc: result.status ?? -1,
+    out: `${result.stdout ?? ""}${result.stderr ?? ""}`,
+  };
 }
 
 /** The per-unit worktree path the swarm derives from its internal Bolt slug. */
@@ -361,6 +373,13 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
       .find((b) => b.includes("**Event**: SWARM_UNIT_CONVERGED"));
     expect(convergedBlock).toContain("**Stage**: functional-design");
     expect(convergedBlock).toContain("**Run floor**: unstarted#0");
+    expect(readFileSync(join(proj, "impl.txt"), "utf-8")).toBe("done\n");
+    expect(git(proj, ["cat-file", "-e", "HEAD:impl.txt"]).rc).toBe(0);
+    expect(git(proj, ["log", "-1", "--format=%s", "--", "impl.txt"]).out.trim()).toBe(
+      "aidlc swarm: alpha (batch 1)",
+    );
+    expect(eventCount(proj, "WORKTREE_MERGED")).toBe(1);
+    expect(existsSync(wtPath(proj, "alpha"))).toBe(false);
   }, 120000);
 
   test("1b legacy-safe Unit names complete the autonomous swarm lifecycle", () => {
@@ -899,33 +918,18 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
   }, 120000);
 
   // ===========================================================================
-  // Case 14: a converged unit whose MERGE-BACK failed gets NO SWARM_UNIT_CONVERGED
-  // row. That row is the engine's batch-advance signal; emitting it for a unit
-  // whose metadata never landed on main would advance the run past an unmerged
-  // unit. It gets no SWARM_UNIT_FAILED row either (the unit did converge) — the
-  // failure envelope + exit 2 carry the merge outcome, and the row lands when a
-  // finalize retry scoped to the unit merges cleanly.
+  // Case 14: a converged unit whose git merge-back failed gets NO
+  // SWARM_UNIT_CONVERGED row. The metadata merge lands first, so a retry must
+  // skip complete --merge once Bolt Refs no longer names the slug, then retry
+  // the preserved branch/worktree integration.
   // ===========================================================================
-  test("14 merge failure: converged-but-unmerged unit gets no SWARM_UNIT_CONVERGED row", () => {
+  test("14 merge failure: wrong target checkout preserves the worktree and retry merges cleanly", () => {
     const proj = makeSwarmFixture();
     runRef(proj, ["prepare", "--batch", "1", "--units", "orphan", "--base", "main"]);
     writeFileSync(join(wtPath(proj, "orphan"), "impl.txt"), "done\n");
     logWorktreeReview(proj, "orphan");
-    // Force a deterministic merge failure while keeping the intent record
-    // discoverable so the referee can read its review receipt. Replacing the
-    // forked state file with a directory makes `aidlc-state merge` fail when it
-    // reads the mirror, before any main-state mutation.
-    const orphanState = join(
-      wtPath(proj, "orphan"),
-      "aidlc",
-      "spaces",
-      "default",
-      "intents",
-      DEFAULT_RECORD_DIR,
-      "aidlc-state.md",
-    );
-    rmSync(orphanState);
-    mkdirSync(orphanState);
+    expect(git(proj, ["checkout", "-q", "-b", "not-the-base"]).rc).toBe(0);
+
     const f = runRef(proj, [
       "finalize",
       "--batch",
@@ -947,8 +951,34 @@ describe("t134 swarm referee — prepare/check/finalize (migrated from t134-swar
     );
     // ...and the failure envelope names it as unmerged.
     expect(env.merge_failures.map((m: { unit: string }) => m.unit)).toEqual(["orphan"]);
+    expect(env.merge_failures[0].detail).toContain("expected branch main, found not-the-base");
     // The load-bearing advance signal did NOT fire — and no false FAILED row either.
     expect(eventCount(proj, "SWARM_UNIT_CONVERGED")).toBe(0);
     expect(eventCount(proj, "SWARM_UNIT_FAILED")).toBe(0);
+    expect(eventCount(proj, "WORKTREE_MERGED")).toBe(0);
+    expect(existsSync(wtPath(proj, "orphan"))).toBe(true);
+    expect(
+      parseRefsList(getField(readStateFile(proj), "Bolt Refs") ?? ""),
+    ).not.toContain(boltSlugForUnit("orphan"));
+
+    expect(git(proj, ["checkout", "-q", "main"]).rc).toBe(0);
+    const retried = runRef(proj, [
+      "finalize",
+      "--batch",
+      "1",
+      "--units",
+      "orphan",
+      "--claimed",
+      "orphan",
+      "--check-cmd",
+      "test -f impl.txt",
+    ]);
+    expect(retried.rc).toBe(0);
+    expect(JSON.parse(retried.out).merge_failures).toEqual([]);
+    expect(eventCount(proj, "SWARM_UNIT_CONVERGED")).toBe(1);
+    expect(eventCount(proj, "WORKTREE_MERGED")).toBe(1);
+    expect(existsSync(wtPath(proj, "orphan"))).toBe(false);
+    expect(readFileSync(join(proj, "impl.txt"), "utf-8")).toBe("done\n");
+    expect(git(proj, ["cat-file", "-e", "HEAD:impl.txt"]).rc).toBe(0);
   }, 120000);
 });

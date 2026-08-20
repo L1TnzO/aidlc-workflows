@@ -13,15 +13,15 @@
 // stage's real gate) instead of another invoke-swarm, so the conductor presents
 // the single stage gate and the workflow advances.
 //
-// THE COMPLETION SIGNAL IS THE AUDIT LEDGER, NOT DISK ARTIFACTS. A swarm unit is
-// built inside an isolated Bolt worktree; `aidlc-bolt complete --merge`
-// consolidates only the AIDLC metadata (state + audit + runtime-graph fragment)
-// back to the main checkout, never the unit's produced artifact files. So the
-// engine keys batch advance on the `SWARM_UNIT_CONVERGED` audit rows the referee
-// (`aidlc-swarm.ts finalize`) writes back, one per genuinely-converged unit,
-// each carrying a `Unit name` field. This test seeds those rows directly into
-// the deterministic audit shard (no git worktrees, no live model) to control the
-// converged set, exactly the way it would look after real finalize merges.
+// THE COMPLETION SIGNAL IS THE AUDIT LEDGER, NOT DISK ARTIFACTS. Finalize
+// integrates each swarm unit into its prepare-time base checkout, but files may
+// land in a selected sibling repo and do not encode the exact stage-attempt
+// identity. So the engine keys batch advance on the `SWARM_UNIT_CONVERGED` audit
+// rows the referee (`aidlc-swarm.ts finalize`) writes back, one per genuinely-
+// converged unit, each carrying a `Unit name` field. This test seeds those rows
+// directly into the deterministic audit shard (no git worktrees, no live model)
+// to control the converged set, exactly the way it would look after real
+// finalize merges.
 //
 // SOURCE UNDER TEST (dist/claude/.claude/tools/aidlc-orchestrate.ts):
 //   - tryEmitSwarm (batch selection + terminal settle) + swarmConvergedUnits

@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.19] - 2026-08-20
+
+Autonomous swarm finalize now integrates each converged Unit's code and artifacts into the prepare-time base branch instead of merging only AIDLC metadata. **Upgrade:** refresh your `dist/<harness>/` shell; ensure the target main or sibling checkout has the Unit's base branch checked out before finalize, and pass the same `--repo <name>` used for prepare on multi-repo intents.
+
+* `aidlc-swarm.ts finalize` commits worktree changes while excluding fork-managed state, audit, and runtime-graph metadata, then composes `aidlc-worktree merge --strategy squash`.
+* Successful Unit integration emits `WORKTREE_MERGED` and removes the worktree and Bolt branch; empty converged worktrees are discarded, while merge conflicts preserve the worktree for inspection and retry.
+* A finalize retry after metadata already landed skips the idempotent `aidlc-bolt complete --merge` step and retries the preserved git branch, so the `SWARM_UNIT_CONVERGED` row still appears only after integration succeeds.
+* `finalize --repo <name>` targets the same sibling repository as `prepare --repo <name>`; a checkout on a non-base branch returns the existing `merge_failures` envelope and exit 2.
+
 ## [2.6.18] - 2026-08-19
 
 Classic and Express are new scope options, and the implicit default scope is now Classic — a **declared behavior change**: invocations that name no scope and match no keyword now run the v1-style lifecycle without Ideation instead of the full-lifecycle Feature scope. Exactly two things control the implicit default: the `AWS_AIDLC_DEFAULT_SCOPE` env var (which overrides) and the framework's hard-coded `classic` fallback. Express has a deterministic requirements-to-conditional-deploy path, and conditional protocol modules reduce fixed context without dropping reviewer recovery behavior. **Upgrade:** refresh your `dist/<harness>/` shell; in-flight workflows keep their persisted scope and need no migration; set `AWS_AIDLC_DEFAULT_SCOPE=feature` (Claude: the `.claude/settings.json` `env` block, which now ships `classic`) to keep the previous full-lifecycle default.

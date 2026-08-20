@@ -37,7 +37,7 @@
 //       no audit — it informs the conductor's retry decision (knowledge), it does
 //       not commit anything. Same input → same verdict, however many times called.
 //   finalize --batch <n> --units <a,b,c> --claimed <a,b> --check-cmd <cmd>
-//            [--test-file <path>] [--reasons <unit>=<reason>,...]
+//            [--test-file <path>] [--reasons <unit>=<reason>,...] [--repo <name>]
 //       The AUTHORITATIVE gate. The conductor's claimed-converged set is an
 //       explicit input and the only thing finalize trusts from it. For each
 //       claimed unit, RE-RUN the check (green + untampered) and, when the current
@@ -45,8 +45,11 @@
 //       REVIEW_COMPLETED receipt before any merge. A unit named in --claimed but
 //       red or unreviewed on disk is refused the merge and lands in the failure
 //       envelope (the lying-conductor guard). Serialised HOLD-MERGE merge-back of
-//       the genuine passes only, then emit the full SWARM_* audit trail + the typed
-//       envelope + exit 0/2. --reasons carries the conductor's
+//       the genuine passes only: merge the fork-managed AIDLC data, commit the
+//       remaining worktree changes, then squash them to the prepare-time base
+//       branch with aidlc-worktree merge. --repo selects the same sibling repo as
+//       prepare. Then emit the full SWARM_* audit trail + the typed envelope +
+//       exit 0/2. --reasons carries the conductor's
 //       typed attribution for a DECLINED (unclaimed) unit — unsatisfiable /
 //       budget-exhausted / cap-exhausted — recorded faithfully (the conductor
 //       judges WHY a unit gave up; the tool only records it, never for a claimed
@@ -64,6 +67,8 @@
 //
 // COMPOSES existing tools, does NOT reimplement them:
 //   - aidlc-worktree create        -> the isolated git worktree per unit
+//   - aidlc-worktree merge/discard -> squash genuine work back to its base, or
+//     remove an empty worktree without leaking its Bolt branch
 //   - aidlc-bolt start --worktree  -> state/audit/runtime-graph fork into it
 //   - aidlc-bolt complete --merge  -> the AIDLC-data merge back to the base
 //   - aidlc-bolt release-merge     -> release the existing per-Bolt HOLD-MERGE
@@ -75,9 +80,8 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
-import { basename, join, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
-import { dirname } from "node:path";
 import { appendAuditEntry } from "./aidlc-audit.ts";
 import {
   auditBlockField,
@@ -89,6 +93,7 @@ import {
   latestMainWorkflowStageRunFloor,
   latestMainWorkflowStageRunFloorForProject,
   parseArgs,
+  parseRefsList,
   readAuditShardEvents,
   readAllAuditShards,
   readStateFile,
@@ -147,6 +152,10 @@ interface ToolRun {
   stderr: string;
 }
 
+interface GitRun extends ToolRun {
+  status: number | null;
+}
+
 function runTool(toolFile: string, args: string[], projectDir: string): ToolRun {
   const executable = compiledExecutable();
   const noun = toolFile.replace(/^aidlc-/, "").replace(/\.ts$/, "");
@@ -163,6 +172,46 @@ function runTool(toolFile: string, args: string[], projectDir: string): ToolRun 
     ok: result.status === 0,
     stdout: result.stdout ?? "",
     stderr: result.stderr ?? "",
+  };
+}
+
+function runGit(cwd: string, args: string[]): GitRun {
+  const result = spawnSync("git", args, {
+    cwd,
+    encoding: "utf-8",
+    timeout: 60_000,
+  });
+  return {
+    ok: result.status === 0,
+    status: result.status,
+    stdout: result.stdout ?? "",
+    stderr: result.stderr ?? "",
+  };
+}
+
+function gitFailure(command: string, result: GitRun): string {
+  const detail = result.stderr.trim() || result.stdout.trim() || `exit ${result.status ?? "unknown"}`;
+  return `${command} failed: ${detail}`;
+}
+
+function swarmMetadataPaths(
+  projectDir: string,
+  boltSlug: string,
+  intent?: string,
+  space?: string,
+): { worktree: string; paths: string[] } {
+  const worktree = worktreePath(projectDir, boltSlug);
+  const recordPrefix = relativeRecordDir(projectDir, intent, space);
+  return {
+    worktree,
+    paths: [
+      relative(worktree, worktreeStateFilePath(worktree, recordPrefix)),
+      relative(
+        worktree,
+        dirname(worktreeAuditFilePath(worktree, recordPrefix, projectDir)),
+      ),
+      relative(worktree, worktreeRuntimeGraphPath(worktree, recordPrefix)),
+    ],
   };
 }
 
@@ -218,6 +267,161 @@ function fileTampered(cwd: string, relPath: string): boolean {
     timeout: 60_000,
   });
   return result.status === 1;
+}
+
+function commitSwarmWorktree(
+  projectDir: string,
+  unit: string,
+  boltSlug: string,
+  batch: string,
+  intent?: string,
+  space?: string,
+): { ok: true; committed: boolean } | { ok: false; detail: string } {
+  const metadata = swarmMetadataPaths(projectDir, boltSlug, intent, space);
+  const wt = metadata.worktree;
+  if (!existsSync(wt)) {
+    return { ok: false, detail: `worktree directory does not exist: ${wt}` };
+  }
+
+  const added = runGit(wt, ["add", "-A"]);
+  if (!added.ok) return { ok: false, detail: gitFailure("git add -A", added) };
+
+  for (const relPath of metadata.paths) {
+    const tracked = runGit(wt, ["ls-tree", "-r", "--name-only", "HEAD", "--", relPath]);
+    if (!tracked.ok) {
+      return {
+        ok: false,
+        detail: gitFailure(`git ls-tree -r --name-only HEAD -- ${relPath}`, tracked),
+      };
+    }
+    if (tracked.stdout.trim() !== "") {
+      const restored = runGit(wt, ["checkout", "HEAD", "--", relPath]);
+      if (!restored.ok) {
+        return {
+          ok: false,
+          detail: gitFailure(`git checkout HEAD -- ${relPath}`, restored),
+        };
+      }
+    } else {
+      const unstaged = runGit(
+        wt,
+        ["rm", "-r", "--cached", "--ignore-unmatch", "--", relPath],
+      );
+      if (!unstaged.ok) {
+        return {
+          ok: false,
+          detail: gitFailure(`git rm -r --cached --ignore-unmatch -- ${relPath}`, unstaged),
+        };
+      }
+    }
+  }
+
+  const staged = runGit(wt, ["diff", "--cached", "--quiet"]);
+  if (staged.status === 0) return { ok: true, committed: false };
+  if (staged.status !== 1) {
+    return {
+      ok: false,
+      detail: gitFailure("git diff --cached --quiet", staged),
+    };
+  }
+
+  const message = `aidlc swarm: ${unit} (batch ${batch})`;
+  const committed = runGit(wt, ["commit", "-m", message]);
+  if (!committed.ok) {
+    return { ok: false, detail: gitFailure(`git commit -m "${message}"`, committed) };
+  }
+  return { ok: true, committed: true };
+}
+
+function stashSwarmMetadata(
+  projectDir: string,
+  boltSlug: string,
+  intent?: string,
+  space?: string,
+): { ok: true; oid: string | null } | { ok: false; detail: string } {
+  const metadata = swarmMetadataPaths(projectDir, boltSlug, intent, space);
+  const existingPaths = metadata.paths.filter((path) =>
+    existsSync(join(metadata.worktree, path)),
+  );
+  if (existingPaths.length === 0) return { ok: true, oid: null };
+  const before = runGit(metadata.worktree, ["rev-parse", "-q", "--verify", "refs/stash"]);
+  const beforeOid = before.ok ? before.stdout.trim() : "";
+  const stashed = runGit(metadata.worktree, [
+    "stash",
+    "push",
+    "--all",
+    "-m",
+    `aidlc swarm metadata: ${boltSlug}`,
+    "--",
+    ...existingPaths,
+  ]);
+  if (!stashed.ok) {
+    return { ok: false, detail: gitFailure("git stash push --all", stashed) };
+  }
+  const after = runGit(metadata.worktree, ["rev-parse", "-q", "--verify", "refs/stash"]);
+  if (!after.ok || after.stdout.trim() === beforeOid) {
+    return { ok: true, oid: null };
+  }
+  return { ok: true, oid: after.stdout.trim() };
+}
+
+function stashRef(repoCwd: string, oid: string): string | null {
+  const listed = runGit(repoCwd, ["stash", "list", "--format=%gd %H"]);
+  if (!listed.ok) return null;
+  for (const line of listed.stdout.split(/\r?\n/)) {
+    if (line.endsWith(` ${oid}`)) return line.slice(0, -(oid.length + 1));
+  }
+  return null;
+}
+
+function restoreSwarmMetadata(
+  worktree: string,
+  repoCwd: string,
+  oid: string | null,
+): string | null {
+  if (!oid) return null;
+  const ref = stashRef(repoCwd, oid);
+  if (!ref) return `could not locate metadata stash ${oid}`;
+  const restored = runGit(worktree, ["stash", "pop", "--index", ref]);
+  return restored.ok ? null : gitFailure(`git stash pop --index ${ref}`, restored);
+}
+
+function dropSwarmMetadata(repoCwd: string, oid: string | null): void {
+  if (!oid) return;
+  const ref = stashRef(repoCwd, oid);
+  if (ref) runGit(repoCwd, ["stash", "drop", ref]);
+}
+
+function branchAheadOfTarget(
+  repoCwd: string,
+  boltSlug: string,
+  target: string,
+): { ok: true; ahead: boolean } | { ok: false; detail: string } {
+  const branch = `bolt-${boltSlug}`;
+  const result = runGit(repoCwd, ["rev-list", "--count", `${target}..${branch}`]);
+  if (!result.ok) {
+    return {
+      ok: false,
+      detail: gitFailure(`git rev-list --count ${target}..${branch}`, result),
+    };
+  }
+  const count = Number(result.stdout.trim());
+  if (!Number.isSafeInteger(count) || count < 0) {
+    return {
+      ok: false,
+      detail: `git rev-list returned an invalid commit count for ${target}..${branch}: ${result.stdout.trim()}`,
+    };
+  }
+  return { ok: true, ahead: count > 0 };
+}
+
+function worktreeBaseBranch(projectDir: string, boltSlug: string): string | null {
+  const created = findAllEvents(
+    readAllAuditShards(projectDir),
+    "WORKTREE_CREATED",
+    boltSlug,
+  ).at(-1);
+  return created ? auditBlockField(created.block, "Base branch")?.trim() || null : null;
 }
 
 interface Verdict {
@@ -761,6 +965,21 @@ function handleFinalize(rest: string[]): void {
   const checkCmd = flags["check-cmd"];
   const review = reviewerRequirement(projectDir);
   const currentAttempt = currentSwarmAttempt(projectDir);
+  let repoCwd: string;
+  let repoName: string | null;
+  try {
+    const resolved = resolveConstructionRepo(
+      projectDir,
+      flags.repo,
+      flags.intent,
+      flags.space,
+    );
+    repoCwd = resolved.cwd;
+    repoName = resolved.repo;
+  } catch (e) {
+    fail(e instanceof Error ? e.message : String(e));
+  }
+  const repoArgs = repoName ? ["--repo", repoName] : [];
 
   // Optional per-declined-unit typed reasons: `--reasons a=unsatisfiable,b=budget-exhausted`.
   // The conductor judged WHY each unclaimed unit gave up (knowledge → conductor,
@@ -895,20 +1114,122 @@ function handleFinalize(rest: string[]): void {
   }
 
   // Serialised HOLD-MERGE merge-back of the genuine passes only (sorted for a
-  // deterministic merge order). release-merge is idempotent — safe whether or not
-  // the lock was ever held; complete --merge reaches the add/add-conflict abort
-  // pinned at the composed surface by the worktree-merge tests.
+  // deterministic merge order). release-merge is idempotent. Metadata may
+  // already have landed on a prior finalize whose git merge failed, so Bolt Refs
+  // gates only the metadata dispatch; the worktree commit/merge still retries.
   const mergeFailures: { unit: string; detail: string }[] = [];
   for (const unit of [...genuine].sort()) {
     const boltSlug = swarmBoltSlug(unit);
     runTool("aidlc-bolt.ts", ["release-merge", "--slug", boltSlug], projectDir);
-    const merged = runTool(
-      "aidlc-bolt.ts",
-      ["complete", "--merge", "--slug", boltSlug, "--batch", batch, "--name", unit],
-      projectDir
+
+    let boltRefPresent: boolean;
+    try {
+      const refs = getField(readStateFile(projectDir), "Bolt Refs") ?? "";
+      boltRefPresent = parseRefsList(refs).includes(boltSlug);
+    } catch (e) {
+      mergeFailures.push({
+        unit,
+        detail: `could not read main Bolt Refs: ${e instanceof Error ? e.message : String(e)}`,
+      });
+      continue;
+    }
+    if (boltRefPresent) {
+      const metadataMerged = runTool(
+        "aidlc-bolt.ts",
+        ["complete", "--merge", "--slug", boltSlug, "--batch", batch, "--name", unit],
+        projectDir,
+      );
+      if (!metadataMerged.ok) {
+        mergeFailures.push({
+          unit,
+          detail: metadataMerged.stderr.trim() || metadataMerged.stdout.trim(),
+        });
+        continue;
+      }
+    }
+
+    const target = worktreeBaseBranch(projectDir, boltSlug);
+    if (!target) {
+      mergeFailures.push({
+        unit,
+        detail: `no WORKTREE_CREATED Base branch found for Bolt slug ${boltSlug}`,
+      });
+      continue;
+    }
+
+    const worktreeCommit = commitSwarmWorktree(
+      projectDir,
+      unit,
+      boltSlug,
+      batch,
+      flags.intent,
+      flags.space,
     );
-    if (!merged.ok) {
-      mergeFailures.push({ unit, detail: merged.stderr.trim() || merged.stdout.trim() });
+    if (!worktreeCommit.ok) {
+      mergeFailures.push({ unit, detail: worktreeCommit.detail });
+      continue;
+    }
+
+    const ahead = branchAheadOfTarget(repoCwd, boltSlug, target);
+    if (!ahead.ok) {
+      mergeFailures.push({ unit, detail: ahead.detail });
+      continue;
+    }
+
+    const message = `aidlc swarm: ${unit} (batch ${batch})`;
+    let integrated: ToolRun;
+    let metadataStash: string | null = null;
+    const hasBranchWork = ahead.ahead || worktreeCommit.committed;
+    if (hasBranchWork) {
+      const stashed = stashSwarmMetadata(
+        projectDir,
+        boltSlug,
+        flags.intent,
+        flags.space,
+      );
+      if (!stashed.ok) {
+        mergeFailures.push({ unit, detail: stashed.detail });
+        continue;
+      }
+      metadataStash = stashed.oid;
+      integrated = runTool(
+        "aidlc-worktree.ts",
+        [
+          "merge",
+          "--slug",
+          boltSlug,
+          "--target",
+          target,
+          "--strategy",
+          "squash",
+          "--message",
+          message,
+          ...repoArgs,
+        ],
+        projectDir,
+      );
+    } else {
+      integrated = runTool(
+        "aidlc-worktree.ts",
+        ["discard", "--slug", boltSlug, ...repoArgs],
+        projectDir,
+      );
+    }
+    if (!integrated.ok) {
+      const restoreError = hasBranchWork
+        ? restoreSwarmMetadata(
+            worktreePath(projectDir, boltSlug),
+            repoCwd,
+            metadataStash,
+          )
+        : null;
+      const detail = integrated.stderr.trim() || integrated.stdout.trim();
+      mergeFailures.push({
+        unit,
+        detail: restoreError ? `${detail}; metadata restore failed: ${restoreError}` : detail,
+      });
+    } else if (hasBranchWork) {
+      dropSwarmMetadata(repoCwd, metadataStash);
     }
   }
 

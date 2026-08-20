@@ -259,8 +259,9 @@ territory:
   `finalize` subcommands. On autonomous Code Generation, `prepare` first
   verifies each Unit's approved Testing Contract and fingerprint; it then forks
   worktrees. The remaining commands run the verdict, re-verify every claimed
-  Unit before merge (the lying-conductor guard), serialise merge-back, and emit
-  the six `SWARM_*` audit events.
+  Unit before merge (the lying-conductor guard), merge the AIDLC metadata,
+  commit the remaining worktree changes, squash-merge them to the prepare-time
+  base branch, and emit the six `SWARM_*` audit events.
 - **The engine** `aidlc-orchestrate.ts` — the deterministic router with exactly
   four subcommands: `next`, `continue`, `report`, and `park`; `continue` is
   internal steering transport. It decides when a Construction batch is

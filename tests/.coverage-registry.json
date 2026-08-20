@@ -32,7 +32,7 @@
     },
     "coveredByClass": {
       "function": 165,
-      "audit": 43,
+      "audit": 44,
       "scope": 11,
       "stage": 11,
       "hook": 17,
@@ -900,8 +900,13 @@
       "unitClass": "audit",
       "unitId": "WORKTREE_MERGED",
       "minMechanism": "none",
-      "coveredBy": [],
-      "status": "UNCOVERED"
+      "coveredBy": [
+        {
+          "file": "tests/e2e/t134-swarm-referee.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
