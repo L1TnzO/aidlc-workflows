@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.66] - 2026-08-23
+
+Configured plugin roots without a compose hook now make `aidlc plugin sync` fail with exit 1 and name every unusable root, instead of reporting the no-roots clean no-op. Mixed root sets continue composing valid plugins and warn about each skipped root. **Upgrade:** refresh your `dist/<harness>/` shell so plugin synchronization exposes incomplete plugin installs to users and automation.
+
+* **Behavior change:** `aidlc plugin sync` exits 1 when plugin-root environment variables are configured but none points to a root containing `hooks/compose.ts`.
+* The failure and mixed-root warning identify every skipped root as missing `hooks/compose.ts` or as a root directory that does not exist.
+* With no configured plugin roots, the command retains the exact `no installed plugins; nothing to sync` message and exits 0; mixed sets compose valid roots and retain the existing success line.
+
 ## [2.6.65] - 2026-08-23
 
 Stage graph compilation now rejects ambiguous producers before consumers can resolve an artifact by file order. **Upgrade:** refresh your `dist/<harness>/` shell; existing custom stages or plugins that declare the same consumed artifact in `produces` or `optional_produces` must rename one output or update the consumer.
