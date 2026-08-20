@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.21] - 2026-08-20
+
+Reviewer-backed approval gates now show a compact Review brief with the stage, a plain-language outcome, why the decision is needed now, exact finding locations and required actions, and the effect of each decision. Finding IDs and statuses carry across re-checks so revisions no longer replace the visible finding history. **Upgrade:** refresh your `dist/<harness>/` shell; in-flight workflows need no state migration.
+
+* Reviewer findings use stable `R-01`-style IDs, workspace-relative artifact paths plus section or element, plain-language required actions, and `New` / `Unresolved` / `Resolved` / `Rejected` / `Accepted risk` statuses.
+* Re-review dispatches preserve the prior findings table before replacing `## Review`, allowing reviewers to carry IDs forward and show what changed after a revision or stale-artifact recovery.
+* Reviewer-backed approval gates present the Review brief before the approval question and explain that Approve continues with open findings accepted while Request Changes returns to the listed artifacts.
+
 ## [2.6.18] - 2026-08-19
 
 Classic and Express are new scope options, and the implicit default scope is now Classic — a **declared behavior change**: invocations that name no scope and match no keyword now run the v1-style lifecycle without Ideation instead of the full-lifecycle Feature scope. Exactly two things control the implicit default: the `AWS_AIDLC_DEFAULT_SCOPE` env var (which overrides) and the framework's hard-coded `classic` fallback. Express has a deterministic requirements-to-conditional-deploy path, and conditional protocol modules reduce fixed context without dropping reviewer recovery behavior. **Upgrade:** refresh your `dist/<harness>/` shell; in-flight workflows keep their persisted scope and need no migration; set `AWS_AIDLC_DEFAULT_SCOPE=feature` (Claude: the `.claude/settings.json` `env` block, which now ships `classic`) to keep the previous full-lifecycle default.

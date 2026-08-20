@@ -29,7 +29,7 @@ conductor based on workflow context:
 | `stage-protocol.md` | Core protocol: approval gates, completion messages, question flow, state tracking, agent persona loading, depth guidance, terminology, content validation, and the §13 Learnings Ritual | Every stage (mandatory) |
 | `stage-protocol-recovery.md` | Error Recovery + Change Handling | On session resume, or when a change event is detected mid-stage |
 | `stage-protocol-governance.md` | Phase Boundary Verification (§13) | At phase boundaries (1.7->2.1, 2.9->3.1, 3.7->4.1) |
-| `stage-protocol-reviewer.md` | Reviewer dispatch, receipts, read scope, terminal ordering, and NOT-READY loop | When the directive names an effective reviewer |
+| `stage-protocol-reviewer.md` | Reviewer dispatch, receipts, read scope, terminal ordering, finding continuity, Review brief, and NOT-READY loop | When the directive names an effective reviewer |
 | `stage-protocol-ensemble.md` | Ensemble topology, subagent returns, contribution files, and objection triage | For subagent, pipeline, mob, or support-agent stages |
 | `stage-protocol-construction.md` | Bolt gates, Construction questions, per-unit iteration, receipts, and waves | On the first Construction directive of the session and every invoke-swarm |
 | `stage-protocol-swarm.md` | Harness-specific autonomous fan-out, convergence, finalize, and reviewer boundary | Every invoke-swarm |
@@ -266,11 +266,18 @@ Structured bullet-point summary of what was produced:
 
 ### Part 3: Review + Approval
 
+When the directive carried a reviewer, Part 3 starts with the reviewer module's
+Review brief: stage name, plain-language outcome, why the decision is being
+asked for now, the review's finding table with stable IDs and exact artifact
+locations, and the consequences of Approve and Request Changes. The brief
+precedes the artifact path and approval question.
+
 ```markdown
 **Review:** `<record>/[path to artifacts]`
 ```
 
-Followed by the `AskUserQuestion` approval gate (see Approval Gates section).
+The artifact path is followed by the structured approval gate (see Approval
+Gates section).
 
 ### Part 4: Progress Update
 
@@ -960,17 +967,18 @@ engine from three inputs (low-wins): the stage's declared class, the active
 scope's `review_cap`, and any per-run `--review` override. A `none` resolution
 omits the reviewer block entirely and the stage runs reviewless.
 
-1. **Invoke.** Before every dispatch - the first, a NOT-READY re-invoke, or a
-   re-review after a Part 0 gate-rejection revision - the conductor first
-   deletes any existing `## Review` section on the primary artifact: review
-   history lives in the audit ledger, and a leftover section (in the worst
-   case a pre-revision `READY`) is exactly what a re-review that is itself
-   cut off before writing would be misread against. With the delete rule,
-   "no current `## Review` section" means "incomplete review" uniformly on
-   every path. The conductor then delegates to the agent named in
-   `directive.reviewer`, passing the stage definition path, the Q&A file, the
-   produced artifact paths, and any validation tools from frontmatter - never
-   the builder's `memory.md` or plan, so the reviewer forms independent
+1. **Invoke.** Before every re-dispatch - a NOT-READY iteration, a re-review
+   after a Part 0 gate-rejection revision, or stale-receipt recovery - the
+   conductor extracts the prior `### Findings` table and passes it as
+   `Prior findings (carry IDs forward)`. Only then does it delete the existing
+   `## Review` section. This preserves finding IDs and statuses while ensuring
+   a re-review that is cut off before writing cannot leave an old verdict
+   looking current. With the delete rule, "no current `## Review` section"
+   means "incomplete review" uniformly on every path. The conductor then
+   delegates to the agent named in `directive.reviewer`, passing the stage
+   definition path, the Q&A file, the produced artifact paths, consumed
+   contract paths, any prior findings, and validation tools from frontmatter -
+   never the builder's `memory.md` or plan, so the reviewer forms independent
    judgment.
 2. **Review.** An `adversarial` review runs under the adversarial review contract:
    the reviewer tries to refute the artifact rather than confirm it, grounding
@@ -990,9 +998,10 @@ omits the reviewer block entirely and the stage runs reviewless.
    review). Codex TOML personas, Cursor, Copilot, and Kiro CLI/IDE expose no
    per-agent cap key, so there the budget is persona prose only (the personas'
    `## Turn Budget` section plans for the worst-case cutoff on every harness).
-3. **Verdict.** On `advisory`, both verdicts are terminal in normal flow: the workflow proceeds
-   to the learnings ritual and the gate, where the findings are quoted verbatim
-   for the human to triage (`reviewer_max_iterations` is 1, engine-enforced).
+3. **Verdict and Review brief.** On `advisory`, both verdicts are terminal in
+   normal flow: the workflow proceeds to the learnings ritual and the gate,
+   where the complete findings table is quoted verbatim for the human to
+   triage (`reviewer_max_iterations` is 1, engine-enforced).
    On `adversarial`: READY → proceed to the learnings ritual then the gate.
    NOT-READY with iterations remaining below `reviewer_max_iterations` (default
    2) → the lead agent re-runs to address the findings and the reviewer
@@ -1018,6 +1027,25 @@ omits the reviewer block entirely and the stage runs reviewless.
    refuses the gate, so fixes happen inside the iteration loop, never after the
    terminal receipt. Suggestions riding on a verdict are quoted at the gate for
    the human, not applied.
+
+   Every reviewer-backed human gate opens with the same compact Review brief,
+   before the artifact path and structured approval question:
+
+   - **Stage**: the stage display name.
+   - **Review outcome**: plain words, never the raw `READY` or `NOT-READY`
+     token in user-facing prose.
+   - **Why now**: exactly one reason - first review completed, revision
+     re-checked, or re-check after the artifact changed.
+   - **Findings**: the complete `## Review` findings table, including stable
+     IDs, workspace-relative artifact path plus section/element, required
+     action, and status.
+   - **Decision options**: Approve first, meaning continue with open findings
+     accepted; Request Changes second, meaning return to the listed artifacts.
+
+   Reviewer finding IDs use `R-01` style and never change on re-review.
+   Existing rows remain visible with status `Unresolved`, `Resolved`,
+   `Rejected: <reason>`, or `Accepted risk`; genuinely new rows take the next
+   unused ID and status `New`.
 
 The iteration budget is engine-enforced: `aidlc-log.ts review` refuses a
 `REVIEW_REQUESTED` whose `--iteration` exceeds the stage's effective budget, so

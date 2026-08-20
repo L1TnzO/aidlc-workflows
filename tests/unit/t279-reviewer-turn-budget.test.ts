@@ -24,14 +24,15 @@
 // An uncapped-and-uninstructed reviewer death (turn cap, crash, context
 // exhaustion) used to leave §12a step 3 reading a stale or missing
 // `## Review` - an undefined branch. The guard this test pins:
-//   - step 1 DELETES any existing `## Review` section before EVERY dispatch
-//     (review history lives in the audit ledger, so nothing is lost; deleting
-//     rather than renaming keeps superseded reviewer prose out of the
-//     claim-sources sensor, which skips only the exact `Review` heading, and
-//     out of the artifact forever) - so "no current section" means
-//     "incomplete review" uniformly on first entry and the Part 0 revision
-//     path alike, and no stale pre-revision READY can be misread as covering
-//     a revision;
+//   - step 1 extracts the prior findings table before a re-dispatch, passes it
+//     to the next reviewer so IDs and dispositions carry forward, then DELETES
+//     the existing `## Review` section before EVERY dispatch (receipt history
+//     remains in the audit ledger; deleting rather than renaming keeps
+//     superseded reviewer prose out of the claim-sources sensor, which skips
+//     only the exact `Review` heading, and out of the artifact forever) - so
+//     "no current section" means "incomplete review" uniformly on first entry
+//     and the Part 0 revision path alike, and no stale pre-revision READY can
+//     be misread as covering a revision;
 //   - step 3 validates exactly ONE current `## Review` section with exactly
 //     one canonical verdict (READY | NOT-READY) - partial, verdict-less, and
 //     duplicated sections are an INCOMPLETE attempt, not a verdict;
@@ -204,7 +205,7 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
     }
   });
 
-  test("reviewer module §12a step 1 DELETES any existing ## Review section before EVERY dispatch (core + dist/claude)", () => {
+  test("reviewer module §12a step 1 carries prior findings forward, then DELETES any existing ## Review section before EVERY dispatch (core + dist/claude)", () => {
     // The stale-READY hole: a stage passes review READY; the human rejects at
     // the gate; the builder revises a produces[] artifact; the re-review is
     // itself cut off before writing - and the artifact still carries the
@@ -220,8 +221,17 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
       const body = readFileSync(path, "utf-8");
       const labelled = `${path}\n${body}`;
       expect(labelled).toMatch(/Invoke reviewer sub-agent\.\*\* Before dispatching - on every dispatch, not only the first/);
-      expect(labelled).toContain("DELETE that section");
-      expect(labelled).toMatch(/review history lives in the audit ledger/i);
+      const extract = labelled.indexOf(
+        "extract the complete prior `### Findings` table BEFORE deleting the section",
+      );
+      const deletion = labelled.indexOf(
+        "DELETE the existing `## Review` section",
+        extract,
+      );
+      expect(extract).toBeGreaterThan(-1);
+      expect(deletion).toBeGreaterThan(extract);
+      expect(labelled).toContain("`Prior findings (carry IDs forward):`");
+      expect(labelled).toMatch(/receipt history remains in the audit ledger/i);
       // The Part 0 revision-path paragraph names step 1's delete rule as what
       // protects it.
       expect(labelled).toContain("delete-before-dispatch rule removes the");
@@ -312,8 +322,17 @@ describe("t279 reviewer turn budget is stated on every surface", () => {
         "utf-8",
       );
       const labelled = `harness ${harness.name} module\n${module}`;
-      // Delete-before-dispatch, on every dispatch.
-      expect(labelled).toContain("DELETE that section");
+      // Carry forward before delete-before-dispatch, on every re-dispatch.
+      const extract = labelled.indexOf(
+        "extract the complete prior `### Findings` table BEFORE deleting the section",
+      );
+      const deletion = labelled.indexOf(
+        "DELETE the existing `## Review` section",
+        extract,
+      );
+      expect(extract).toBeGreaterThan(-1);
+      expect(deletion).toBeGreaterThan(extract);
+      expect(labelled).toContain("`Prior findings (carry IDs forward):`");
       expect(labelled).toContain("on every dispatch, not only the first");
       // Canonical-verdict validation.
       expect(labelled).toContain("exactly ONE current `## Review` section");
