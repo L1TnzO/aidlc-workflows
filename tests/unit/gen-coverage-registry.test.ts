@@ -829,6 +829,7 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     "integration/t120-classify-roundtrip.test.ts",
     "integration/t121-stop-hook-enforce.test.ts",
     "integration/t195-stop-hook-compose-carveout.test.ts",
+    "integration/t304-stop-hook-subagent-inflight.test.ts",
     "integration/t127-single-stage-invariant.test.ts",
     "integration/t128-custom-runner.test.ts",
     "integration/t130-scope-runners.test.ts",

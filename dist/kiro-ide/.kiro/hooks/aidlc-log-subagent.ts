@@ -3,7 +3,7 @@
 // a canonical audit event.
 //
 // Receives JSON on stdin with subagent info. No-op if no audit.md exists.
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 import {
@@ -15,6 +15,7 @@ import {
   isoTimestamp,
   recordHookDrop,
   resolveProjectDirFromHook,
+  subagentInflightMarkerPath,
 } from "../tools/aidlc-lib.ts";
 
 export async function run(input: string): Promise<number> {
@@ -41,6 +42,13 @@ try {
 const agentType = parsed.agent_type ?? "unknown";
 const agentId: string = parsed.agent_id ?? "";
 const agentMessage: string = (parsed.last_assistant_message ?? "").slice(0, 200);
+
+try {
+  unlinkSync(subagentInflightMarkerPath(projectDir));
+} catch {
+  // Missing or unreadable marker is non-fatal. Completion logging remains
+  // best-effort and the Stop hook independently bounds stale markers by age.
+}
 
 const auditFile = auditFilePath(projectDir);
 if (!existsSync(auditFile)) return 0;

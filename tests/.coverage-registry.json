@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 596,
+    "total": 598,
     "enumeratedByClass": {
-      "function": 336,
+      "function": 338,
       "audit": 85,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 165,
+      "function": 167,
       "audit": 43,
       "scope": 11,
       "stage": 11,
@@ -3902,6 +3902,30 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:SUBAGENT_INFLIGHT_TTL_MS",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t304-stop-hook-subagent-inflight.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:subagentInflightMarkerPath",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t304-stop-hook-subagent-inflight.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:subgraphForScope",
       "minMechanism": "none",
       "coveredBy": [
@@ -4362,6 +4386,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/integration/t304-stop-hook-subagent-inflight.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t226-detector-corpus.test.ts",
           "mechanism": "none"
         },
@@ -4377,6 +4405,10 @@
       "unitId": "aidlc-deliver-stage-rules",
       "minMechanism": "none",
       "coveredBy": [
+        {
+          "file": "tests/integration/t304-stop-hook-subagent-inflight.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t228-hook-run-exports.test.ts",
           "mechanism": "cli"
@@ -4407,6 +4439,10 @@
       "coveredBy": [
         {
           "file": "tests/integration/t131-hooks-settings-fire.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t304-stop-hook-subagent-inflight.test.ts",
           "mechanism": "cli"
         },
         {

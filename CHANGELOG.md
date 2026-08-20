@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.19] - 2026-08-20
+
+The Stop hook now recognizes when a background Agent/Task is still running, so ending the conductor turn to await that result no longer produces a misleading pending-step continuation. **Upgrade:** refresh your `dist/<harness>/` shell so the dispatch, completion, Stop, and doctor hooks share the new marker protocol.
+
+* Background dispatches with `run_in_background: true` write `aidlc/.aidlc-subagent-inflight` for any agent while an AI-DLC state file exists; foreground dispatches and non-AI-DLC projects do not.
+* Subagent completion clears the marker before audit logging, and a fresh marker lets an interactive Stop end cleanly. Autonomous Construction remains enforced, while markers older than two hours are ignored and cleaned up before the pending-step block resumes.
+* `/aidlc --doctor` reports a fresh background-subagent marker as an advisory pass and a stale marker as a failure with `rm aidlc/.aidlc-subagent-inflight` remediation.
+
 ## [2.6.18] - 2026-08-19
 
 Classic and Express are new scope options, and the implicit default scope is now Classic — a **declared behavior change**: invocations that name no scope and match no keyword now run the v1-style lifecycle without Ideation instead of the full-lifecycle Feature scope. Exactly two things control the implicit default: the `AWS_AIDLC_DEFAULT_SCOPE` env var (which overrides) and the framework's hard-coded `classic` fallback. Express has a deterministic requirements-to-conditional-deploy path, and conditional protocol modules reduce fixed context without dropping reviewer recovery behavior. **Upgrade:** refresh your `dist/<harness>/` shell; in-flight workflows keep their persisted scope and need no migration; set `AWS_AIDLC_DEFAULT_SCOPE=feature` (Claude: the `.claude/settings.json` `env` block, which now ships `classic`) to keep the previous full-lifecycle default.

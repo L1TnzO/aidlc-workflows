@@ -44,8 +44,8 @@
 //      nudge, not eight. When the workflow advances, the signature changes and
 //      the counter resets to 0, so a healthy loop is never throttled.
 //
-// Five human-wait carve-outs keep the hook from punishing a turn that ended
-// *because* it is waiting on the human (or is simply conversational):
+// Seven turn-stop carve-outs keep the hook from punishing a turn that ended
+// for a legitimate wait (human input, background work, or conversation):
 //   1. The Esc interrupt is FREE: Stop hooks do not fire on user interrupt, so
 //      an Esc can never be trapped — no code needed for that case.
 //   2. The interactive GATE is not free: the Stop hook DOES fire when the
@@ -73,7 +73,13 @@
 //      learnings ritual), and for harnesses that render questions as prose.
 //      Like the pending-file carve-out, it is limited to [-] and suppressed
 //      under autonomous Construction.
-//   5. A CONVERSATIONAL turn ends with the human's last prompt answered and NO
+//   5. An IN-FLIGHT COMPOSE gate is positively signalled by the fresh
+//      workspace-level compose marker and is suppressed under autonomous
+//      Construction.
+//   6. An IN-FLIGHT BACKGROUND SUBAGENT is positively signalled by a fresh
+//      workspace-level marker written on background dispatch and cleared on
+//      SubagentStop. Autonomous Construction remains guarded.
+//   7. A CONVERSATIONAL turn ends with the human's last prompt answered and NO
 //      workflow-engine engagement (the conductor ran neither aidlc-orchestrate
 //      nor aidlc-state since that prompt). Issue #365's broader reading: a human
 //      who just wants to CHAT mid-workflow should not be nudged at all. We ALLOW
@@ -133,6 +139,8 @@ import {
   stateFilePath,
   stopHookDir,
   STOP_HOOK_PROBE_ENV,
+  subagentInflightMarkerPath,
+  SUBAGENT_INFLIGHT_TTL_MS,
   turnMarkersShowConversational,
   updateCopilotStopCount,
   SESSION_INTENT_HANDOFF_TTL_MS,
@@ -581,6 +589,48 @@ function isPendingComposeStop(projectDir: string, stateContent: string): boolean
       projectDir,
       HOOK_NAME,
       "ignoring an orphaned compose marker (aidlc/.aidlc-compose-pending older than the freshness window); cleaned it up and falling through to the cap-bounded block",
+    );
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+// --- Tier-2c: pending in-flight background subagent carve-out ----------------
+//
+// A background Agent/Task dispatch legitimately ends the conductor's turn
+// while the worker remains in flight. The stage stays pending, so the bare
+// `next` probe would otherwise inject a forwarding-loop nudge before the
+// background result arrives. POSITIVE-CONFIRMATION: the dispatch hook writes
+// `aidlc/.aidlc-subagent-inflight` only for `run_in_background: true`, and the
+// SubagentStop hook deletes it on completion. AUTONOMY GUARD: never fires under
+// autonomous Construction, where the unattended loop must remain enforced.
+//
+// STALENESS BOUND. A denied dispatch, crashed session, or missing SubagentStop
+// can strand the marker. Honour it only while fresh; stale markers are ignored,
+// best-effort deleted, and recorded before falling through to the cap-bounded
+// block. Any read/stat error also falls through.
+function isPendingSubagentStop(projectDir: string, stateContent: string): boolean {
+  try {
+    if (getField(stateContent, "Construction Autonomy Mode")?.trim() === "autonomous") {
+      return false; // autonomy guard - keep the loop alive
+    }
+    const marker = subagentInflightMarkerPath(projectDir);
+    if (!existsSync(marker)) return false;
+    const ageMs = Date.now() - statSync(marker).mtimeMs;
+    if (ageMs <= SUBAGENT_INFLIGHT_TTL_MS) return true; // fresh - honour the carve-out
+    // Orphaned marker: do not honour it, and best-effort clean it up so it
+    // cannot disable the enforcement loop indefinitely.
+    try {
+      unlinkSync(marker);
+    } catch {
+      // Unlink failure is non-fatal - the staleness check above already refused
+      // to honour the marker, so the loop stays enforced regardless.
+    }
+    recordHookDrop(
+      projectDir,
+      HOOK_NAME,
+      "ignoring an orphaned background-subagent marker (aidlc/.aidlc-subagent-inflight older than the freshness window); cleaned it up and falling through to the cap-bounded block",
     );
     return false;
   } catch {
@@ -1249,6 +1299,19 @@ if (isPendingComposeStop(projectDir, stateContent)) {
     projectDir,
     HOOK_NAME,
     "an in-flight compose proposal is pending human approval (aidlc/.aidlc-compose-pending present); allowing the stop (pending-compose carve-out)",
+  );
+  return allowStop();
+}
+
+// Pending-background-subagent carve-out (tier 2c): a background Agent/Task is
+// still running, so the conductor is correctly parked until its result arrives.
+// Positive-confirmation only (the marker), autonomy-guarded, freshness-bounded,
+// and fail-open (see isPendingSubagentStop).
+if (isPendingSubagentStop(projectDir, stateContent)) {
+  recordHookDrop(
+    projectDir,
+    HOOK_NAME,
+    "a background subagent is still in flight (aidlc/.aidlc-subagent-inflight present); allowing the stop (pending-subagent carve-out)",
   );
   return allowStop();
 }
