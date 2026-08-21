@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.20] - 2026-08-21
+
+Agent and inline-stage prompts now omit stage ownership, shared knowledge-loading sequences, persona-loading steps, and Task-tool banners that duplicate machine-readable stage metadata or the stage protocol. Agent-specific memory guidance remains in compact `Memory Focus` sections. **Upgrade:** refresh your `dist/<harness>/` shell to receive the smaller prompts; workflow state and project artifacts need no migration.
+
+* Domain-agent personas now rely on stage frontmatter for participation and on the stage protocol for shared knowledge loading while retaining their role-specific memory guidance.
+* Inline core and test-pro plugin stages begin with prior-context work because the engine already supplies personas and knowledge before stage execution.
+* `disallowedTools: Task` remains the machine-enforced single-level delegation boundary for all core agents.
+
 ## [2.6.18] - 2026-08-19
 
 Classic and Express are new scope options, and the implicit default scope is now Classic — a **declared behavior change**: invocations that name no scope and match no keyword now run the v1-style lifecycle without Ideation instead of the full-lifecycle Feature scope. Exactly two things control the implicit default: the `AWS_AIDLC_DEFAULT_SCOPE` env var (which overrides) and the framework's hard-coded `classic` fallback. Express has a deterministic requirements-to-conditional-deploy path, and conditional protocol modules reduce fixed context without dropping reviewer recovery behavior. **Upgrade:** refresh your `dist/<harness>/` shell; in-flight workflows keep their persisted scope and need no migration; set `AWS_AIDLC_DEFAULT_SCOPE=feature` (Claude: the `.claude/settings.json` `env` block, which now ships `classic`) to keep the previous full-lifecycle default.

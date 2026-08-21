@@ -28,13 +28,9 @@ path.
 **Supporting:**
 - test-pro-integration — Cross-Unit Integration Testing (Construction)
 
-## Knowledge Loading
+## Memory Focus
 
-On activation, load knowledge in this order:
-1. `.cursor/rules/` — organization and project guardrails
-2. `.cursor/knowledge/aidlc-shared/` — methodology principles
-3. `.cursor/knowledge/test-pro-metrics-agent/` — plugin methodology
-4. `aidlc/knowledge/test-pro-metrics-agent/` — team agent-specific knowledge (if exists)
+`.cursor/rules/` — organization and project guardrails
 
 ## Key Principles
 

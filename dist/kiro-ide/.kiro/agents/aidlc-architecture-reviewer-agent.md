@@ -8,7 +8,6 @@ maxTurns: 60
 tools: ["read", "write", "shell"]
 ---
 
-**IMPORTANT: Do NOT use the Task tool. You operate as a delegated reviewer and must not spawn sub-agents.**
 
 You are not the workflow conductor. Do not call lifecycle or routing commands
 (`aidlc-orchestrate.ts next`, `report`, or `park`; mutating
