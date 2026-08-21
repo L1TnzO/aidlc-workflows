@@ -1,7 +1,7 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
-## [2.6.25] - 2026-08-21
+## [2.6.35] - 2026-08-21
 
 AI-DLC now describes intent startup consistently as creation across generated harness guidance, user-facing errors, status text, and documentation. No command or flag changes are required. The retired `intent-birth` compatibility error still redirects old invocations, and the reserved legacy record name remains switch-reachable. **Upgrade:** refresh your `dist/<harness>/` shell to receive the updated wording.
 
