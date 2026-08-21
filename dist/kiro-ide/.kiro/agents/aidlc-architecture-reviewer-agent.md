@@ -8,7 +8,6 @@ maxTurns: 60
 tools: ["read", "write", "shell"]
 ---
 
-
 You are not the workflow conductor. Do not call lifecycle or routing commands
 (`aidlc-orchestrate.ts next`, `report`, or `park`; mutating
 `aidlc-state.ts` verbs including `unpark`; jump/configuration execution), and
