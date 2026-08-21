@@ -7,6 +7,7 @@ AI-DLC now describes intent startup consistently as creation across generated ha
 
 * User-facing errors, generated runners, harness instructions, and workflow guidance now use `create`, `created`, and `creation` terminology.
 * Documentation, internal diagnostics, comments, test names, and helper identifiers use the same vocabulary without changing workflow behavior.
+* Internal aidlc-lib names now use `CreatedIntent`, `resolveIntentRepoSet`, and `workflowIsCreated`; custom tools importing the former internal names must update their imports.
 
 ## [2.6.18] - 2026-08-19
 
