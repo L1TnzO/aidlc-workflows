@@ -47,10 +47,10 @@ import {
 
 // intent-create runs before a workflow exists, so SessionStart cannot stamp that
 // conversation yet. PostToolUse is the first boundary that carries both the
-// exact host session_id and the successful birth result. Bind from that pair,
+// exact host session_id and the successful creation result. Bind from that pair,
 // never from the workspace-global `.current-session` marker: another
 // pre-workflow conversation may have started more recently. Existing stamps
-// are immutable here so a second, unrelated birth keeps the ending session
+// are immutable here so a second, unrelated creation keeps the ending session
 // owned by its original intent.
 function bindCreatedIntentToInvokingSession(
   projectDir: string,

@@ -184,7 +184,7 @@ describe("t203 nested-project detection (the depth-1 fallback)", () => {
   });
 });
 
-// P4: intent-create writes state into the born intent's per-intent record dir.
+// P4: intent-create writes state into the created intent's per-intent record dir.
 function recordDirOf(p: string): string {
   const spaceCursor = join(p, "aidlc", "active-space");
   const space = existsSync(spaceCursor)
@@ -201,8 +201,8 @@ function recordDirOf(p: string): string {
   return join(p, "aidlc-docs");
 }
 
-/** Birth a scope on a bare (empty, Greenfield) scaffolded project. */
-function birth(scope: string): { stderr: string; stateFile: string } {
+/** Create a scope on a bare (empty, Greenfield) scaffolded project. */
+function runIntentCreate(scope: string): { stderr: string; stateFile: string } {
   const p = createTestProject();
   tempDirs.push(p);
   const r = spawnSync(
@@ -217,7 +217,7 @@ function birth(scope: string): { stderr: string; stateFile: string } {
 
 describe("t203 greenfield advisory (incremental scopes, no routing override)", () => {
   test("bugfix on an empty workspace stays Greenfield, RE SKIP, and emits the stderr advisory", () => {
-    const { stderr, stateFile } = birth("bugfix");
+    const { stderr, stateFile } = runIntentCreate("bugfix");
     // Routing is UNCHANGED: still Greenfield, reverse-engineering still SKIPs.
     expect(stateFile).toContain("- **Project Type**: Greenfield");
     // The greenfield RE-skip annotation in the Stages-to-Skip row. The shipped
@@ -234,7 +234,7 @@ describe("t203 greenfield advisory (incremental scopes, no routing override)", (
   test.each(["refactor", "security-patch"])(
     "%s on an empty workspace also emits the advisory (all three incremental scopes covered)",
     (scope: string) => {
-      const { stderr, stateFile } = birth(scope);
+      const { stderr, stateFile } = runIntentCreate(scope);
       expect(stateFile).toContain("- **Project Type**: Greenfield");
       expect(stderr).toContain(`scope "${scope}"`);
       expect(stderr).toContain("usually targets existing code");
@@ -242,7 +242,7 @@ describe("t203 greenfield advisory (incremental scopes, no routing override)", (
   );
 
   test("poc on an empty workspace stays Greenfield and emits NO advisory (not an incremental scope)", () => {
-    const { stderr, stateFile } = birth("poc");
+    const { stderr, stateFile } = runIntentCreate("poc");
     expect(stateFile).toContain("- **Project Type**: Greenfield");
     expect(stderr).not.toContain("usually targets existing code");
   });

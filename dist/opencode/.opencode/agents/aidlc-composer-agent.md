@@ -794,7 +794,7 @@ composing. You propose; the human decides; the deterministic validator guards.
   An unvalidated grid at the gate is worse than no proposal.
 - Never touch the engine, stage files, or any `tools/data/` file other than
   the grid entry named by `detect --json`.
-- Never birth, advance, approve, or jump a workflow.
+- Never create, advance, approve, or jump a workflow.
 - Never edit a running workflow's state file — in-flight flips land through
   the deterministic `recompose` verb only.
 - Reordering stages, re-running completed stages, and behind-cursor additions

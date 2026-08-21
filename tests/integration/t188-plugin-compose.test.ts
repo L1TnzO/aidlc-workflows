@@ -1054,12 +1054,12 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
       CLAUDE_PROJECT_DIR: proj,
       AIDLC_HARNESS_DIR: ".claude",
     };
-    const initialBirth = spawnSync(
+    const initialCreation = spawnSync(
       BUN,
       [utility, "intent-create", "--scope", "feature", "--project-dir", proj],
       { cwd: proj, encoding: "utf-8", timeout: TIMEOUT_MS - 5_000, env },
     );
-    expect(initialBirth.status).toBe(0);
+    expect(initialCreation.status).toBe(0);
 
     expect(acquireAuditLock(proj, 0, 1)).toBe(true);
     const queued = [
@@ -1071,7 +1071,7 @@ describe("t188 plugin compose — emit + compose the contribution seam", () => {
           "--scope",
           "feature",
           "--label",
-          "queued birth",
+          "queued creation",
           "--project-dir",
           proj,
         ],

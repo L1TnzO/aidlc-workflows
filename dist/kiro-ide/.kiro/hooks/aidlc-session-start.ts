@@ -23,7 +23,7 @@
 //
 // With no aidlc-state.md the hook emits no workflow event or context, but still
 // bootstraps cursors/includes and records host session identity and transcript
-// metadata so the first intent born later in the turn can bind to it.
+// metadata so the first intent created later in the turn can bind to it.
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { appendAuditEntry } from "../tools/aidlc-audit.ts";
@@ -55,7 +55,8 @@ export async function run(input: string): Promise<number> {
 const projectDir = resolveProjectDirFromHook(import.meta.url);
 
 // Read stdin before the workflow-state gate. A fresh session commonly starts
-// before the first intent is born; retaining its id lets intent-birth stamp that
+// before the first intent is created; retaining its id lets intent-create stamp
+// that
 // session to the new record without inventing session ownership in the tool.
 let source = "startup";
 let rebindCheckOnly = false;
@@ -104,7 +105,7 @@ try {
 }
 
 // Record the live conversation on EVERY fire, including a pre-workflow start.
-// intent-birth reads this marker and binds an unstamped session to the first
+// intent-create reads this marker and binds an unstamped session to the first
 // intent it creates. Separate from the per-session intent stamp below.
 if (sessionId) writeCurrentSessionId(projectDir, sessionId);
 
@@ -167,7 +168,7 @@ if (sessionId) {
   const stampedUuid = readSessionIntentUuid(projectDir, sessionId);
   if (eventType === "SESSION_STARTED") {
     // Stamp the intent this conversation is bound to (only when one resolves —
-    // a flat-legacy / pre-birth project has no uuid to stamp).
+    // a flat-legacy / pre-creation project has no uuid to stamp).
     if (liveUuid) writeSessionIntentUuid(projectDir, sessionId, liveUuid);
   } else if (source === "resume") {
     // Offer ONLY on a real drift: a stamp exists, it differs from the live

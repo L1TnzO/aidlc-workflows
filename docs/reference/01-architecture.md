@@ -433,7 +433,7 @@ missing cursor falls back to a default):
 - **Intent** — `aidlc/spaces/<space>/intents/active-intent`, precedence
   `explicit arg > cursor (if it names a real record holding aidlc-state.md) >
   lone-intent > null` (`activeIntent`, `aidlc-lib.ts:411-435`). A `null` intent
-  means "no record yet" — the signal the orchestrator uses to auto-birth the
+  means "no record yet" - the signal the orchestrator uses to auto-create the
   first intent.
 
 The path helpers — `intentsDir`, `knowledgeDir`, `codekbDir` (`aidlc-lib.ts`),

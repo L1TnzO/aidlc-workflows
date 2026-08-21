@@ -13,7 +13,7 @@
 //     verb-intercept hook classifies every leading terminal verb and runs it
 //     off-band as an aidlc-utility subcommand + arms the roll-forward latch. A
 //     compose entry there would spawn a nonexistent subcommand and neuter the
-//     same-turn birth `next` - so classifyTerminalCommand(["compose", ...])
+//     same-turn creation `next` - so classifyTerminalCommand(["compose", ...])
 //     must stay null (the Kiro-adapter regression pin).
 //   - Branch 8 (cold-start freeform, no --scope) now routes by keyword
 //     inference instead of the static static-default confirm: a clear keyword
@@ -111,7 +111,7 @@ describe("t198 compose is NOT a terminal command (Kiro seam regression)", () => 
 
 // ===========================================================================
 // Cold start (front): compose / --new-scope / --report each reach the
-// composer-dispatch print - never the freeform confirm, never a birth.
+// composer-dispatch print - never the freeform confirm, never a creation.
 // ===========================================================================
 describe("t198 cold-start compose surfaces -> composer dispatch", () => {
   test("leading compose verb + freeform text -> print naming the composer agent", () => {
@@ -208,10 +208,10 @@ describe("t198 Branch 8: inference confirm + compose offer", () => {
     expect(String(d.question)).not.toContain('"feature" workflow');
   });
 
-  test("known-scope positional still births (Branch 7b untouched)", () => {
+  test("known-scope positional still creates (Branch 7b untouched)", () => {
     proj = createTestProject();
-    // The birth path needs a GENUINELY empty workspace (zero intents), else the
-    // engine asks to select the seeded record instead of birthing (t118's
+    // The creation path needs a GENUINELY empty workspace (zero intents), else the
+    // engine asks to select the seeded record instead of creating (t118's
     // pattern).
     removeWorkspaceRecord(proj);
     const d = directiveOf(runNext(proj, ["bugfix"]).out);
