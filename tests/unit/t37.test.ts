@@ -1,4 +1,4 @@
-// covers: subcommand:aidlc-utility:doctor
+// covers: subcommand:aidlc-utility:doctor, function:consumedArtifactProducerCollisions
 //
 // CLI-contract port of tests/unit/t37-utility-doctor-drift.sh (TAP plan 23),
 // mechanism = cli. Equal-or-stronger migration: every .sh assertion that
@@ -242,7 +242,7 @@ describe("t37 aidlc-utility doctor — state/audit drift (migrated from t37-util
 });
 
 // ============================================================
-// Graph-level checks — cycle / orphan / scope / schema / refs / keyword
+// Graph-level checks — cycle / orphan / scope / schema / refs / producers / keyword
 // (covers: subcommand:aidlc-utility:doctor)
 // ============================================================
 
@@ -433,6 +433,75 @@ describe("t37 aidlc-utility doctor — graph-level checks", () => {
     const r = doctor(p, { AIDLC_STAGE_GRAPH: graph });
     expect(r.out).toContain("broken reference");
     expect(r.status).toBe(1);
+  });
+
+  test("13a: duplicate producers happy -> every consumed artifact has a single producer", () => {
+    const p = track(createTestProject());
+    const r = doctor(p);
+    expect(r.out).toContain(
+      "Duplicate producers: every consumed artifact has a single producer",
+    );
+  });
+
+  test("13b: duplicate producers sad -> advisory names every producer slug", () => {
+    const p = track(createTestProject());
+    const graph = fixtureFile(
+      "duplicate-producers-graph",
+      JSON.stringify([
+        {
+          slug: "stage-a",
+          number: "0.1",
+          name: "Stage A",
+          phase: "initialization",
+          execution: "ALWAYS",
+          condition: "Always",
+          lead_agent: "orchestrator",
+          support_agents: [],
+          mode: "inline",
+          produces: ["shared-artifact"],
+          consumes: [],
+          requires_stage: [],
+          inputs: "",
+          outputs: "",
+        },
+        {
+          slug: "stage-b",
+          number: "0.2",
+          name: "Stage B",
+          phase: "initialization",
+          execution: "ALWAYS",
+          condition: "Always",
+          lead_agent: "orchestrator",
+          support_agents: [],
+          mode: "inline",
+          produces: ["shared-artifact"],
+          consumes: [],
+          requires_stage: [],
+          inputs: "",
+          outputs: "",
+        },
+        {
+          slug: "stage-c",
+          number: "0.3",
+          name: "Stage C",
+          phase: "initialization",
+          execution: "ALWAYS",
+          condition: "Always",
+          lead_agent: "orchestrator",
+          support_agents: [],
+          mode: "inline",
+          produces: [],
+          consumes: [{ artifact: "shared-artifact", required: true }],
+          requires_stage: [],
+          inputs: "",
+          outputs: "",
+        },
+      ]),
+    );
+    const r = doctor(p, { AIDLC_STAGE_GRAPH: graph });
+    expect(r.out).toContain(
+      'Duplicate producers: 1 consumed artifact(s) with multiple producers (advisory); runtime resolves the first by load order: "shared-artifact" <- [stage-a, stage-b]',
+    );
   });
 
   test("14: keyword overlap happy -> 'no conflicts' on real scope-mapping", () => {
