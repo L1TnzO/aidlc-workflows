@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.69] - 2026-08-23
+
+Concurrent CLI sessions in one checkout now keep workflow selection, usage, and lifecycle ownership per session for independent intents within the same space. Cold sessions retain a null-intent binding before any workflow exists, and later intent creation or space switching moves or clears attribution with that binding. **Upgrade:** refresh your `dist/<harness>/` shell to install the session binding and PID ancestry helpers.
+
+* Session bindings live under the existing gitignored `aidlc/.aidlc-sessions/` runtime directory and resolve before shared cursor fallbacks.
+* Hook payload identity, `AIDLC_SESSION_OVERRIDE`, and validated PID ancestry provide one inherited session identity for spawned tools; divergent identities fail before workflow writes.
+* SessionStart aligns harness includes with the selected session space, while intent creation and empty-space switches update the UUID attribution used by usage folding and SessionEnd.
+* **Known limitation:** harness-native method includes remain one mutable checkout-wide surface, so simultaneous sessions in different spaces can still race on ambient delivered rules. Windows ancestry and shared-process harness sessions also retain shared-cursor behavior where no distinct identity is available.
+
 ## [2.6.65] - 2026-08-23
 
 Stage graph compilation now rejects ambiguous producers before consumers can resolve an artifact by file order. **Upgrade:** refresh your `dist/<harness>/` shell; existing custom stages or plugins that declare the same consumed artifact in `produces` or `optional_produces` must rename one output or update the consumer.
