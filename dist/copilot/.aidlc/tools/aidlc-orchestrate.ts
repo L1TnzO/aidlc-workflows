@@ -163,6 +163,7 @@ import {
   unitLifecycleReceiptsInUse,
   toPosix,
   validScopes,
+  validSessionId,
   harnessDir,
   type WorkspaceCommand,
   type WorkflowSelection,
@@ -6245,7 +6246,9 @@ export function main(argv: string[]): void {
   // Extract --project-dir (mirrors aidlc-jump.ts / aidlc-state.ts).
   let projectDir: string | undefined;
   let attemptId: string | undefined;
-  let sessionId: string | undefined;
+  let sessionId: string | undefined =
+    validSessionId(process.env.AIDLC_SESSION_OVERRIDE) ?? undefined;
+  let explicitSessionId: string | undefined;
   let conflictingAttemptId = false;
   let conflictingSessionId = false;
   const filteredArgs: string[] = [];
@@ -6262,9 +6265,10 @@ export function main(argv: string[]): void {
       if (candidate === undefined || candidate.startsWith("--") || candidate.trim() === "") {
         throw new Error("--session requires a nonblank session id.");
       }
-      if (sessionId !== undefined && sessionId !== candidate) {
+      if (explicitSessionId !== undefined && explicitSessionId !== candidate) {
         conflictingSessionId = true;
       }
+      explicitSessionId = candidate;
       sessionId = candidate;
       i++;
     } else if (!literalArgs && rawArgs[i] === "--aidlc-attempt-id" && i + 1 < rawArgs.length) {

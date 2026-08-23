@@ -73,6 +73,7 @@ import {
   swarmConvergedUnits,
   updateIntentStatus,
   validateUnitName,
+  validSessionId,
   validScopes,
   withAuditLock,
   worktreeDocsDir,
@@ -513,8 +514,14 @@ let lockIntent: string | undefined;
 let lockSpace: string | undefined;
 
 export function main(argv: string[]): void {
-  setSessionResolutionOverride(process.env.AIDLC_SESSION_OVERRIDE);
   const args = [...argv];
+  const sessionIdx = args.indexOf("--session");
+  const sessionFlag =
+    sessionIdx >= 0 ? validSessionId(args[sessionIdx + 1]) : null;
+  if (sessionIdx >= 0) args.splice(sessionIdx, 2);
+  setSessionResolutionOverride(
+    sessionFlag ?? validSessionId(process.env.AIDLC_SESSION_OVERRIDE) ?? undefined,
+  );
 
   // Extract --project-dir flag
   const pdIdx = args.indexOf("--project-dir");
