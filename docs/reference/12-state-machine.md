@@ -615,9 +615,11 @@ may contain a new boundary from a forced re-init in those releases; completions
 before that boundary read as untracked and fail open until their stages
 complete again.
 
-Known limitation: artifact resolution is scope-blind. The express scope runs
-Code Generation and Build and Test with stage-level artifact paths and no Unit
-DAG, so the resolver's per-unit expansion finds zero instances for those
-outputs and they are not fingerprinted; changes to them are currently not
-detected (fail-open, never a false drift). A scope-aware resolution contract is
-follow-up work.
+Artifact resolution follows the approved workflow plan for per-Unit stages.
+When Units Generation is skipped, including express and recomposed zero-Unit
+plans, validity resolves one stage-level artifact instance under
+`<record>/construction/<stage>/` and does not inspect a Bolt DAG or stale
+per-Unit directories. When Units Generation executes, normal Bolt DAG expansion
+and the legacy no-DAG directory fallback remain unchanged. Missing or ambiguous
+plan state makes receipt capture or inspection unavailable with a non-blocking
+warning rather than reporting false drift.

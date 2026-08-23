@@ -372,6 +372,13 @@ export function captureStageValidationBasis(
   options: CaptureStageValidationOptions = {},
 ): StageValidationBasis {
   const projectType = projectTypeFrom(stateContent);
+  const captureOptions: CaptureStageValidationOptions = {
+    ...options,
+    resolution: {
+      ...options.resolution,
+      stateContent,
+    },
+  };
   return {
     schema: VALIDATION_BASIS_SCHEMA,
     graphContract: graphContractFingerprint(stage),
@@ -381,9 +388,9 @@ export function captureStageValidationBasis(
       stage,
       stages,
       projectType,
-      options,
+      captureOptions,
     ),
-    outputs: captureOutputBasis(projectDir, stage, options),
+    outputs: captureOutputBasis(projectDir, stage, captureOptions),
   };
 }
 

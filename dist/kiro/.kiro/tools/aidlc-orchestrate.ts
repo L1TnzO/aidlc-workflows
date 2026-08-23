@@ -113,6 +113,7 @@ import {
   clearActiveDirectiveMarker,
   codekbRepoName,
   currentUnitLifecycleMode,
+  effectivePlanAction,
   errorMessage,
   filterProducesByKind,
   firstInScopeStageOfPhase,
@@ -160,6 +161,7 @@ import {
   swarmConvergedUnits,
   unitCompletedReceipts,
   unitLifecycleReceiptsInUse,
+  usesStageLevelPerUnitArtifacts,
   toPosix,
   validScopes,
   harnessDir,
@@ -2654,33 +2656,6 @@ function transportRunStage(
 // Find the graph node for a slug. Composes loadGraph() (the one cached read).
 function nodeForSlug(slug: string): GraphStage | undefined {
   return loadGraph().find((s) => s.slug === slug);
-}
-
-// Resolve the approved plan's action for one stage. The state suffix is the
-// live plan (including recomposition) and therefore wins over the stock scope
-// grid. Keep this separate from GraphStage.execution: ALWAYS|CONDITIONAL
-// describes stage-authored applicability, not whether this workflow approved
-// the stage for execution.
-function effectivePlanAction(
-  slug: string,
-  scope: string,
-  stateContent: string | null,
-): "EXECUTE" | "SKIP" | undefined {
-  const stateAction = stateContent
-    ? parseStateStageSuffixes(stateContent).get(slug)
-    : undefined;
-  return stateAction ?? loadScopeMapping()[scope]?.stages[slug];
-}
-
-// A per-unit stage falls back to one stage-level iteration only when the
-// effective plan excludes the Unit-DAG producer. This distinguishes an
-// intentional zero-Unit scope/composed plan from a normal workflow whose
-// Units Generation stage has not produced its artifact yet.
-function usesStageLevelPerUnitArtifacts(
-  scope: string,
-  stateContent: string | null,
-): boolean {
-  return effectivePlanAction("units-generation", scope, stateContent) !== "EXECUTE";
 }
 
 // The `next` handler reads workflow state and emits exactly one directive. Rule

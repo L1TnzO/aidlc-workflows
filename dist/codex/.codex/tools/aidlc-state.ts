@@ -71,6 +71,7 @@ import {
   stagesInScope,
   swarmConvergedUnits,
   updateIntentStatus,
+  usesStageLevelPerUnitArtifacts,
   validateUnitName,
   validScopes,
   withAuditLock,
@@ -1490,13 +1491,9 @@ function producesDirsForStage(
   if (rec === null) return [];
   const perUnit = stage.for_each === "unit-of-work";
   if (perUnit) {
-    const resolution = resolveBoltDag(pd);
     const stateContent = readStateFile(pd);
     const scope = getField(stateContent, "Scope");
-    const unitProducerAction =
-      parseStateStageSuffixes(stateContent).get("units-generation") ??
-      (scope ? loadScopeMapping()[scope]?.stages["units-generation"] : undefined);
-    if (resolution.state === "none" && unitProducerAction !== "EXECUTE") {
+    if (usesStageLevelPerUnitArtifacts(scope, stateContent)) {
       return [join(rec, "construction", stage.slug)];
     }
     const ctorRoot = join(rec, "construction");

@@ -9722,10 +9722,32 @@ export function nextInScopeStage(
   return null;
 }
 
-// Parse the "- [x] slug — EXECUTE" / "— SKIP" suffix from Stage Progress. The
-// suffix is set by `aidlc-utility init` per scope + Greenfield/Brownfield
-// overrides, then preserved across stage transitions — it represents the
-// plan, not the current run-state (checkbox letters are separate).
+// Resolve one stage's action in the approved workflow plan. State suffixes
+// include recomposition and project-type overrides, so they take precedence
+// over the stock scope grid.
+export function effectivePlanAction(
+  slug: string,
+  scope: string | null | undefined,
+  stateContent: string | null,
+): "EXECUTE" | "SKIP" | undefined {
+  const stateAction = stateContent
+    ? parseStateStageSuffixes(stateContent).get(slug)
+    : undefined;
+  if (stateAction !== undefined) return stateAction;
+  return scope ? loadScopeMapping()[scope]?.stages[slug] : undefined;
+}
+
+// A per-unit stage uses one stage-level artifact set when the approved plan
+// excludes the Unit DAG producer.
+export function usesStageLevelPerUnitArtifacts(
+  scope: string | null | undefined,
+  stateContent: string | null,
+): boolean {
+  return effectivePlanAction("units-generation", scope, stateContent) !== "EXECUTE";
+}
+
+// Parse each stage's EXECUTE or SKIP suffix from Stage Progress. The suffix is
+// the approved plan action, independent of the checkbox run state.
 export function parseStateStageSuffixes(
   content: string
 ): Map<string, "EXECUTE" | "SKIP"> {
