@@ -11,8 +11,6 @@ import { existsSync, readFileSync } from "node:fs";
 import { relative, resolve, sep } from "node:path";
 import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
-  activeIntent,
-  activeSpace,
   auditBlockField,
   boltSlugForUnit,
   emitError,
@@ -37,6 +35,7 @@ import {
   reviewArtifactFingerprint,
   resolveBoltDag,
   resolveProjectDir,
+  resolveWorkflowSelection,
   resolveReviewClass,
   selfAttributedDecisionMarker,
   SUMMARY_CONFIRMATION_CHECKPOINT,
@@ -914,8 +913,9 @@ function handleReview(args: string[]): void {
   }
 
   const pd = resolveActiveProjectDir(projectDir);
-  const space = activeSpace(pd);
-  const intent = activeIntent(pd, space);
+  const selection = resolveWorkflowSelection(pd);
+  const space = selection.space;
+  const intent = selection.intent;
   if (!intent) {
     error("Cannot resolve the active intent for review logging.");
   }

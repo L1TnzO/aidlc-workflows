@@ -20,9 +20,9 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 607,
+    "total": 618,
     "enumeratedByClass": {
-      "function": 345,
+      "function": 356,
       "audit": 86,
       "scope": 11,
       "stage": 33,
@@ -31,7 +31,7 @@
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 171,
+      "function": 177,
       "audit": 44,
       "scope": 11,
       "stage": 11,
@@ -2235,6 +2235,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:intentUuidForSelection",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:invalidateActiveDirectiveContext",
       "minMechanism": "none",
       "coveredBy": [
@@ -3234,6 +3241,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:readSessionBinding",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t310-session-binding-helpers.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:readSessionIntentHandoff",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3353,6 +3372,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:relativeRecordDirForSelection",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -3568,6 +3594,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:resolveSessionIdFromAncestry",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t310-session-binding-helpers.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:resolveStage",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3579,6 +3617,22 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:resolveWorkflowSelection",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t310-session-binding-helpers.test.ts",
+          "mechanism": "none"
+        },
+        {
+          "file": "tests/unit/t312-orchestrate-session-binding.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -3766,6 +3820,13 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:sessionPidMapDir",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:SESSIONS_DIR",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3841,6 +3902,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:setSessionResolutionOverride",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -3999,6 +4067,13 @@
         }
       ],
       "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:stateFilePathForSelection",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
     },
     {
       "unitClass": "function",
@@ -4449,6 +4524,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:writeSessionBinding",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t310-session-binding-helpers.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:writeSessionIntentHandoff",
       "minMechanism": "none",
       "coveredBy": [],
@@ -4461,6 +4548,34 @@
       "coveredBy": [
         {
           "file": "tests/unit/t167-session-intent-helpers.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:writeSessionPidAncestry",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t311-session-binding-writers.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t310-session-binding-helpers.test.ts",
+          "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:writeSessionPidEntry",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t310-session-binding-helpers.test.ts",
           "mechanism": "none"
         }
       ],
@@ -4704,6 +4819,10 @@
       "coveredBy": [
         {
           "file": "tests/integration/t173-session-switch-restamp.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t311-session-binding-writers.test.ts",
           "mechanism": "cli"
         },
         {
@@ -6883,6 +7002,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/integration/t311-session-binding-writers.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t229-workspace-parser.test.ts",
           "mechanism": "cli"
         }
@@ -6933,6 +7056,10 @@
         {
           "file": "tests/integration/t21b.test.ts",
           "mechanism": "sdk"
+        },
+        {
+          "file": "tests/integration/t311-session-binding-writers.test.ts",
+          "mechanism": "cli"
         },
         {
           "file": "tests/unit/t191-composed-scope-write.test.ts",
@@ -7103,6 +7230,10 @@
           "mechanism": "cli"
         },
         {
+          "file": "tests/integration/t311-session-binding-writers.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t229-workspace-parser.test.ts",
           "mechanism": "cli"
         }
@@ -7132,6 +7263,10 @@
         },
         {
           "file": "tests/integration/t175-space-create-memory-isolation.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t311-session-binding-writers.test.ts",
           "mechanism": "cli"
         },
         {
