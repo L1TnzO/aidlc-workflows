@@ -22,6 +22,7 @@ import {
   setCheckbox,
   setField,
   setPhaseProgress,
+  setSessionResolutionOverride,
   stageIndex,
   writeStateFile,
 } from "./aidlc-lib.js";
@@ -53,6 +54,7 @@ function emitAudit(
 let projectDir: string | undefined;
 
 export function main(argv: string[]): void {
+  setSessionResolutionOverride(process.env.AIDLC_SESSION_OVERRIDE);
   const rawArgs = argv;
 
   // Extract --project-dir

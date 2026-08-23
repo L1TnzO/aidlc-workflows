@@ -81,6 +81,7 @@ import {
   removeTreeSync,
   renameIntoPlace,
   resolveProjectDir,
+  setSessionResolutionOverride,
   uuidv7,
   validSpaceFlag,
   withAuditLock,
@@ -3798,6 +3799,11 @@ let projectDir: string | undefined;
 
 export function main(argv: string[]): void {
   const args = [...argv];
+  const sessionIdx = args.indexOf("--session");
+  if (sessionIdx >= 0) {
+    setSessionResolutionOverride(args[sessionIdx + 1]);
+    args.splice(sessionIdx, 2);
+  }
   const pdIdx = args.indexOf("--project-dir");
   if (pdIdx >= 0) {
     projectDir = args[pdIdx + 1];

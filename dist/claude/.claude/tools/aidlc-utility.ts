@@ -116,6 +116,7 @@ import {
   setCheckbox,
   setField,
   setPhaseProgress,
+  setSessionResolutionOverride,
   setStageSuffix,
   scopeGridPath,
   scopesDir,
@@ -6533,6 +6534,7 @@ function handleResolveEnvScope(): void {
 // ---------------------------------------------------------------------------
 
 export async function main(argv: string[]): Promise<void> {
+  setSessionResolutionOverride(process.env.AIDLC_SESSION_OVERRIDE);
   const rawArgs = argv;
   errorArgs = [...rawArgs];
   const { positional, flags, bareFlags, blankFlags } = parseArgs(rawArgs);
