@@ -9,6 +9,11 @@ Stage validity now fingerprints zero-Unit Construction outputs at the same stage
 * Intent birth now ensures the active space's `codekb/` parent exists, matching the shape created for named spaces. Per-repository `codekb/<repo>/` stores remain lazy and are still created only when Reverse Engineering writes them.
 * Source-freshness receipt tests that execute repeated CLI chains now carry explicit 60-second case timeouts for stable loaded-suite runs.
 
+Stage graph compilation now rejects ambiguous producers before consumers can resolve an artifact by file order. **Upgrade:** refresh your `dist/<harness>/` shell; existing custom stages or plugins that declare the same consumed artifact in `produces` or `optional_produces` must rename one output or update the consumer.
+
+* `aidlc-graph compile` now reports `Duplicate producers for consumed artifact`, naming every producing stage file and slug plus one consuming stage.
+* Shared artifact names remain valid when no stage consumes them, including the shipped multi-stage `traceability` output pattern.
+
 ## [2.6.64] - 2026-08-23
 
 The Kiro IDE distribution now ships only IDE-native agent and permission surfaces. **Upgrade:** re-copy `dist/kiro-ide/` into your project, then remove any `.kiro/agents/aidlc.json`, `.kiro/agents/aidlc-*-agent.json`, and `.kiro/settings/cli.json` files left by an older overlay copy.
