@@ -137,11 +137,13 @@ import {
   readSessionIntentUuid,
   recordHookDrop,
   resolveProjectDirFromHook,
+  setSessionResolutionOverride,
   stageDir,
   stateFilePath,
   stopHookDir,
   STOP_HOOK_PROBE_ENV,
   turnMarkersShowConversational,
+  validSessionId,
   updateCopilotStopCount,
   SESSION_INTENT_HANDOFF_TTL_MS,
   harnessDir,
@@ -1055,14 +1057,16 @@ function continuationReason(
   continueCommand?: string,
   rulesContent?: Array<{ path: string; text: string }>,
   retained = false,
+  sessionId = "",
 ): string {
   const where = stage.length > 0 ? ` for "${stage}"` : "";
+  const sessionSuffix = sessionId ? ` --session ${sessionId}` : "";
   if (kind === "rehydrate") {
     return `AI-DLC coordination evidence is missing or stale. Run one fresh \`bun ${harnessDir()}/tools/aidlc-orchestrate.ts next\`; do not reuse an earlier continuation token.`;
   }
   if (retained && kind === "load-steering" && continueToken) {
     const command = continueCommand ??
-      `bun ${harnessDir()}/tools/aidlc-orchestrate.ts continue "${continueToken}"`;
+      `bun ${harnessDir()}/tools/aidlc-orchestrate.ts continue "${continueToken}"${sessionSuffix}`;
     return `The delivered AIDLC steering part${where} is still active. Apply every path/text entry from its already-delivered \`rules_content\`, then run \`${command}\`. Keep applying and continuing every returned load-steering part until \`run-stage\`; do not restart at part 1, and do not summarise or narrate rule chunks to the user.`;
   }
   if (retained && kind === "run-stage") {
@@ -1074,7 +1078,7 @@ function continuationReason(
       `The AIDLC workflow still has rules to load${where}. ` +
       "Apply every path/text entry in this exact `rules_content` payload before continuing:\n\n" +
       `${exactContent}\n\nThen run ` +
-      `\`${continueCommand ?? `bun ${harnessDir()}/tools/aidlc-orchestrate.ts continue "${continueToken}"`}\` ` +
+      `\`${continueCommand ?? `bun ${harnessDir()}/tools/aidlc-orchestrate.ts continue "${continueToken}"${sessionSuffix}`}\` ` +
       "and keep following each load-steering step it returns until it answers `run-stage`. " +
       "Do not summarise or narrate these rule chunks to the user."
     );
@@ -1095,6 +1099,14 @@ function continuationReason(
 
 export async function run(input: string): Promise<number> {
 const projectDir = resolveProjectDirFromHook(import.meta.url);
+let earlySessionId = "";
+try {
+  const early = JSON.parse(input) as { session_id?: unknown };
+  if (typeof early.session_id === "string") earlySessionId = early.session_id;
+} catch {
+  /* malformed input remains fail-open */
+}
+setSessionResolutionOverride(validSessionId(earlySessionId) ?? undefined);
 
 // Write a health heartbeat (mirrors the other hooks' .aidlc-hooks-health beat).
 try {
@@ -1136,7 +1148,7 @@ let transcriptPath: string | null = null;
 // session-scoped `<sessionId>.transcript` pointer written below. "" when absent
 // (a TTY/empty invocation or a host that omits it); writeCurrentTranscriptPath
 // still writes the unscoped `current.transcript` fallback in that case.
-let sessionId = "";
+let sessionId = earlySessionId;
 // Transcript format: Codex's rollout JSONL lives under a `.../sessions/<date>/
 // rollout-*.jsonl` path and uses a {type,payload} shape; Claude's is message-
 // shaped JSONL. Default to Claude; switch to Codex when the path looks like a
@@ -1433,6 +1445,7 @@ return blockStop(
     directive.continueCommand,
     directive.rulesContent,
     directive.retained,
+    sessionId,
   ),
 );
 }

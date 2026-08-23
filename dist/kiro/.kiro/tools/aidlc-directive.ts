@@ -147,6 +147,7 @@ export interface RunStageDirective {
   /** Optional spoken line for the user; presentation only (see NarrationField). */
   narration?: NarrationField;
   stage: string;
+  report_command: string;
   phase: string;
   lead_agent: string;
   support_agents: string[];
@@ -457,6 +458,7 @@ export const VALID_REVIEW_CLASSES = ["adversarial", "advisory"] as const;
 const RUN_STAGE_FIELDS = [
   "kind",
   "stage",
+  "report_command",
   "phase",
   "lead_agent",
   "support_agents",
@@ -728,6 +730,7 @@ function checkRunStageShared(
   errors: string[],
 ): void {
   checkString(o, "stage", kind, errors);
+  checkString(o, "report_command", kind, errors);
   checkString(o, "phase", kind, errors);
   checkString(o, "lead_agent", kind, errors);
   checkStringArray(o, "support_agents", kind, errors);
@@ -1333,6 +1336,8 @@ if (import.meta.main) {
     {
       kind: "run-stage",
       stage: "domain-design",
+      report_command:
+        "bun <harness>/tools/aidlc-orchestrate.ts report --stage domain-design --result <outcome>",
       phase: "inception",
       lead_agent: "aidlc-architect-agent",
       support_agents: ["aidlc-aws-platform-agent", "aidlc-design-agent"],
@@ -1402,6 +1407,8 @@ if (import.meta.main) {
     {
       kind: "run-stage",
       stage: "functional-design",
+      report_command:
+        "bun <harness>/tools/aidlc-orchestrate.ts report --stage functional-design --result <outcome>",
       phase: "construction",
       lead_agent: "aidlc-architect-agent",
       support_agents: ["aidlc-developer-agent"],
