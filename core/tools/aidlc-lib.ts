@@ -2120,9 +2120,9 @@ export function sessionsDir(projectDir: string): string {
   return join(workspaceRoot(projectDir), SESSIONS_DIR);
 }
 
-// The per-session record file: `aidlc/.aidlc-sessions/<session-id>`. The
-// session id is normalised to the slug shape so a host-supplied id can never
-// escape the sessions dir (path traversal / separators); an empty id yields "".
+// The per-session record file: `aidlc/.aidlc-sessions/<session-id>`. Session
+// ids must already match the canonical safe shape; normalization-changing
+// values are rejected so distinct raw identities cannot alias one record.
 function safeSessionId(sessionId: string): string {
   const safe = sessionId
     .replace(/[^A-Za-z0-9._-]+/g, "-")
@@ -2133,23 +2133,28 @@ function safeSessionId(sessionId: string): string {
 }
 
 export function validSessionId(sessionId: string | undefined): string | null {
-  const candidate = sessionId?.trim() ?? "";
-  return candidate && safeSessionId(candidate) === candidate ? candidate : null;
+  const raw = sessionId ?? "";
+  return raw && safeSessionId(raw) === raw ? raw : null;
 }
 
-export function sessionConflict(
-  projectDir: string,
-  explicitSessionId: string | undefined,
-): string | null {
-  const explicit = validSessionId(explicitSessionId);
-  const ancestry = resolveSessionIdFromAncestry(projectDir);
-  return explicit && ancestry && explicit !== ancestry ? ancestry : null;
+export class SessionResolutionConflictError extends Error {
+  constructor(
+    readonly overrideSessionId: string,
+    readonly ancestrySessionId: string,
+  ) {
+    super(
+      `Session override "${overrideSessionId}" conflicts with the owning conversation ` +
+        `"${ancestrySessionId}". Work from the owning conversation, or rebind this ` +
+        "session with the intent/space switch verbs.",
+    );
+    this.name = "SessionResolutionConflictError";
+  }
 }
 
 function sessionRecordPath(projectDir: string, sessionId: string): string {
-  const safe = safeSessionId(sessionId);
-  if (!safe) return "";
-  return join(sessionsDir(projectDir), safe);
+  const valid = validSessionId(sessionId);
+  if (!valid) return "";
+  return join(sessionsDir(projectDir), valid);
 }
 
 export interface SessionBinding {
@@ -2357,7 +2362,7 @@ function readSessionPidEntry(projectDir: string, pid: number): SessionPidEntry |
     const candidate = parsed as Partial<SessionPidEntry>;
     if (
       typeof candidate.sessionId !== "string" ||
-      !safeSessionId(candidate.sessionId) ||
+      validSessionId(candidate.sessionId) === null ||
       (candidate.startTime !== null && typeof candidate.startTime !== "string")
     ) {
       return null;
@@ -2381,7 +2386,7 @@ export function writeSessionPidEntry(
   if (
     Date.now() >= deadlineMs ||
     !path ||
-    !safeSessionId(sessionId) ||
+    validSessionId(sessionId) === null ||
     !processIsAlive(pid)
   ) {
     return;
@@ -2432,7 +2437,7 @@ function gcSessionPidEntries(projectDir: string, deadlineMs: number): void {
 // siblings, not descendants, of that short-lived hook.
 export function writeSessionPidAncestry(projectDir: string, sessionId: string): void {
   sessionAncestryCache.delete(projectDir);
-  if (!safeSessionId(sessionId) || process.platform === "win32") return;
+  if (validSessionId(sessionId) === null || process.platform === "win32") return;
   const deadline = Date.now() + SESSION_ANCESTRY_BUDGET_MS;
   gcSessionPidEntries(projectDir, deadline);
   const seen = new Set<number>();
@@ -2500,30 +2505,28 @@ export interface WorkflowSelectionOptions {
   sessionId?: string;
 }
 
-let processSessionResolutionOverride: string | undefined;
-
-// Pin library resolution for one CLI invocation. The engine sets this while it
-// handles an explicit --session call so nested helpers cannot fall back to a
-// different cursor. Clearing restores ancestry and cursor behavior.
-export function setSessionResolutionOverride(sessionId?: string): void {
-  const candidate = sessionId?.trim() ?? "";
-  processSessionResolutionOverride =
-    candidate && safeSessionId(candidate) ? candidate : undefined;
-}
-
 // Resolve one stable workflow target for an operation. Explicit selectors win,
 // then the session binding, then the legacy cursor and lone-intent rules.
 export function resolveWorkflowSelection(
   projectDir: string,
   options: WorkflowSelectionOptions = {},
 ): WorkflowSelection {
-  const explicitSession =
-    options.sessionId?.trim() ??
-    processSessionResolutionOverride ??
-    "";
-  const sessionId =
-    (explicitSession && safeSessionId(explicitSession) ? explicitSession : null) ??
-    resolveSessionIdFromAncestry(projectDir);
+  const explicitSession = validSessionId(options.sessionId);
+  let sessionId: string | null;
+  if (explicitSession) {
+    sessionId = explicitSession;
+  } else {
+    const envSession = validSessionId(process.env.AIDLC_SESSION_OVERRIDE);
+    const ancestrySession = resolveSessionIdFromAncestry(projectDir);
+    if (
+      envSession &&
+      ancestrySession &&
+      envSession !== ancestrySession
+    ) {
+      throw new SessionResolutionConflictError(envSession, ancestrySession);
+    }
+    sessionId = envSession ?? ancestrySession;
+  }
   const binding = sessionId ? readSessionBinding(projectDir, sessionId) : null;
   const space = options.space ?? binding?.space ?? activeSpace(projectDir);
   let intent: string | null;
@@ -2717,7 +2720,7 @@ export function readCurrentSessionId(projectDir: string): string | null {
 // Record the most-recently-active session id. Best-effort; no-op on a blank id
 // (a TTY/empty hook invocation has no session to record).
 export function writeCurrentSessionId(projectDir: string, sessionId: string): void {
-  if (!sessionId) return;
+  if (validSessionId(sessionId) === null) return;
   try {
     mkdirSync(sessionsDir(projectDir), { recursive: true });
     writeFileSync(currentSessionPath(projectDir), `${sessionId}\n`, "utf-8");
@@ -2825,7 +2828,7 @@ export function createIntent(
   );
   setActiveIntentCursor(projectDir, dirName, space);
   const creatingSession =
-    (sessionId?.trim() ? sessionId : null) ??
+    validSessionId(sessionId) ??
     resolveSessionIdFromAncestry(projectDir);
   if (creatingSession) {
     writeSessionBinding(projectDir, creatingSession, space, dirName);

@@ -101,7 +101,6 @@ import {
   readActiveDirectiveMarker,
   recordHookDrop,
   readCurrentSessionId,
-  resolveSessionIdFromAncestry,
   resolveWorkflowSelection,
   readStateFile,
   refreshActiveDirectiveMarker,
@@ -116,7 +115,6 @@ import {
   setCheckbox,
   setField,
   setPhaseProgress,
-  setSessionResolutionOverride,
   setStageSuffix,
   scopeGridPath,
   scopesDir,
@@ -130,7 +128,6 @@ import {
   stateFilePath,
   withAuditLock,
   validateBoltSlug,
-  validSessionId,
   validScopes,
   worktreeAuditFilePath,
   worktreePath,
@@ -241,7 +238,6 @@ const INTENT_CREATE_VALUE_FLAGS = [
   "test-strategy",
   "review",
   "repos",
-  "session",
   "project-dir",
 ] as const;
 const INTENT_CREATE_DESCRIPTIVE_FLAGS = ["scope", "arguments", "label"] as const;
@@ -1078,7 +1074,6 @@ function handleStatus(projectDir: string, flags: Record<string, string>): void {
   const selection = resolveWorkflowSelection(projectDir, {
     space: flags.space,
     intent: flags.intent,
-    sessionId: flags.session,
   });
   const sp =
     selection.intent === null
@@ -4370,9 +4365,7 @@ function handleIntentCreate(projectDir: string, flags: Record<string, string>): 
     die(`Unknown test strategy: "${testStrategyOverride}". Valid: minimal, standard, comprehensive.`);
   }
   const reviewOverride = parseReviewOverride(flags.review);
-  const initialSelection = resolveWorkflowSelection(projectDir, {
-    sessionId: flags.session,
-  });
+  const initialSelection = resolveWorkflowSelection(projectDir);
 
   // Resolve the repo set the intent touches (P7 multi-repo): an explicit
   // `--repos a,b` wins; absent it, sibling auto-discovery scans the workspace
@@ -4906,11 +4899,8 @@ function handleUpgrade(): void {
 function printIntentListing(
   projectDir: string,
   asJson: boolean,
-  flags: Record<string, string>,
 ): void {
-  const selection = resolveWorkflowSelection(projectDir, {
-    sessionId: flags.session,
-  });
+  const selection = resolveWorkflowSelection(projectDir);
   const space = selection.space;
   const intents = listIntents(projectDir, space, selection.intent);
   const active = intents.find((i) => i.active);
@@ -4953,11 +4943,8 @@ function printIntentListing(
 function printSpaceListing(
   projectDir: string,
   asJson: boolean,
-  flags: Record<string, string>,
 ): void {
-  const selection = resolveWorkflowSelection(projectDir, {
-    sessionId: flags.session,
-  });
+  const selection = resolveWorkflowSelection(projectDir);
   const spaces = listSpaces(projectDir, selection.space);
   const active = spaces.find((s) => s.active);
   if (asJson) {
@@ -4989,7 +4976,7 @@ function handleIntent(
   const asJson = flags.json === "true";
   const verbOrTarget = positional[1];
   if (verbOrTarget === "list") {
-    printIntentListing(projectDir, asJson, flags);
+    printIntentListing(projectDir, asJson);
     return;
   }
   if (verbOrTarget === "create") {
@@ -5001,7 +4988,7 @@ function handleIntent(
     die("Usage: aidlc-utility intent switch <name>");
   }
   if (!target) {
-    printIntentListing(projectDir, asJson, flags);
+    printIntentListing(projectDir, asJson);
     return;
   }
   // `intent help`/`-h` is a help request, not a switch to a record named
@@ -5014,9 +5001,7 @@ function handleIntent(
     handleHelp();
     return;
   }
-  const selection = resolveWorkflowSelection(projectDir, {
-    sessionId: flags.session,
-  });
+  const selection = resolveWorkflowSelection(projectDir);
   const space = selection.space;
   const intents = listIntents(projectDir, space, selection.intent);
   // Exact record-dir match first; then a unique slug match.
@@ -5055,7 +5040,6 @@ function handleIntent(
   // orphan (registry-less) record is fail-safe. Best-effort throughout.
   const sid =
     selection.sessionId ??
-    resolveSessionIdFromAncestry(projectDir) ??
     readCurrentSessionId(projectDir);
   if (sid) {
     writeSessionBinding(projectDir, sid, space, match.dirName);
@@ -5078,7 +5062,7 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
   const asJson = flags.json === "true";
   const verbOrTarget = positional[1];
   if (verbOrTarget === "list") {
-    printSpaceListing(projectDir, asJson, flags);
+    printSpaceListing(projectDir, asJson);
     return;
   }
   if (verbOrTarget === "create") {
@@ -5090,7 +5074,7 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
     die("Usage: aidlc-utility space switch <name>");
   }
   if (!raw) {
-    printSpaceListing(projectDir, asJson, flags);
+    printSpaceListing(projectDir, asJson);
     return;
   }
   // `space help`/`-h` is a help request, not a switch to a space named "help"
@@ -5110,11 +5094,9 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
       `Unknown space "${target}". Existing: ${spaces.map((s) => s.name).join(", ")}. This command only switches between existing spaces. Do not create a space to recover from this error - creating one is a separate, deliberate move (/aidlc space create <name>, or legacy /aidlc space-create <name>).`
     );
   }
+  const selection = resolveWorkflowSelection(projectDir);
   setActiveSpaceCursor(projectDir, target);
-  const sessionId =
-    (flags.session?.trim() || null) ??
-    resolveSessionIdFromAncestry(projectDir) ??
-    readCurrentSessionId(projectDir);
+  const sessionId = selection.sessionId ?? readCurrentSessionId(projectDir);
   if (sessionId) {
     const targetIntent = activeIntent(projectDir, target);
     writeSessionBinding(projectDir, sessionId, target, targetIntent);
@@ -5145,9 +5127,7 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
 // no state read, no audit — mirrors the intent/space read-only query arms.
 function handleCodekbPath(projectDir: string, flags: Record<string, string>): void {
   const asJson = flags.json === "true";
-  const selection = resolveWorkflowSelection(projectDir, {
-    sessionId: flags.session,
-  });
+  const selection = resolveWorkflowSelection(projectDir);
   const space = selection.space;
   const repo = flags.repo && flags.repo.length > 0
     ? flags.repo
@@ -5188,9 +5168,7 @@ function handleCodekbPath(projectDir: string, flags: Record<string, string>): vo
 // no audit.
 function handleCodekbScopeDiff(projectDir: string, flags: Record<string, string>): void {
   const asJson = flags.json === "true";
-  const selection = resolveWorkflowSelection(projectDir, {
-    sessionId: flags.session,
-  });
+  const selection = resolveWorkflowSelection(projectDir);
   const space = selection.space;
   const repo = flags.repo && flags.repo.length > 0
     ? flags.repo
@@ -6541,14 +6519,6 @@ export async function main(argv: string[]): Promise<void> {
   const rawArgs = argv;
   errorArgs = [...rawArgs];
   const { positional, flags, bareFlags, blankFlags } = parseArgs(rawArgs);
-  if (flags.session !== undefined && validSessionId(flags.session) === null) {
-    die("--session requires a safe, nonblank session id.");
-  }
-  setSessionResolutionOverride(
-    validSessionId(flags.session) ??
-      validSessionId(process.env.AIDLC_SESSION_OVERRIDE) ??
-      undefined,
-  );
   const subcommand = positional[0];
   if (
     (subcommand === "intent-create" || subcommand === "init") &&
@@ -6570,9 +6540,6 @@ export async function main(argv: string[]): Promise<void> {
   errorProjectDirArg = missingValueFlags.has("project-dir")
     ? undefined
     : flags["project-dir"];
-  if (missingValueFlags.has("session")) {
-    die("--session requires a nonblank session id.");
-  }
   if (isIntentCreate) {
     validateIntentCreateFlagValues(flags, missingValueFlags);
   }
