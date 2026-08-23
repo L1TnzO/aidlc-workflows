@@ -315,7 +315,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/unit/t304-pipeline-link-receipts.test.ts",
+          "file": "tests/unit/t315-pipeline-link-receipts.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -1622,7 +1622,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/unit/t304-pipeline-link-receipts.test.ts",
+          "file": "tests/unit/t315-pipeline-link-receipts.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -3063,7 +3063,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/unit/t304-pipeline-link-receipts.test.ts",
+          "file": "tests/unit/t315-pipeline-link-receipts.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -3075,7 +3075,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/unit/t304-pipeline-link-receipts.test.ts",
+          "file": "tests/unit/t315-pipeline-link-receipts.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -4358,7 +4358,7 @@
       "minMechanism": "none",
       "coveredBy": [
         {
-          "file": "tests/unit/t304-source-freshness-receipts.test.ts",
+          "file": "tests/unit/t314-source-freshness-receipts.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -6077,7 +6077,7 @@
       "minMechanism": "cli",
       "coveredBy": [
         {
-          "file": "tests/unit/t304-pipeline-link-receipts.test.ts",
+          "file": "tests/unit/t315-pipeline-link-receipts.test.ts",
           "mechanism": "cli"
         }
       ],
