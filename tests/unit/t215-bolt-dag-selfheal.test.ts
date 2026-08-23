@@ -24,7 +24,10 @@ import {
   seededRecordDir,
   seededStateFile,
 } from "../harness/fixtures.ts";
-import { artifactFilename } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
+import {
+  artifactFilename,
+  parseBoltDag,
+} from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 
 resetAidlcEnv();
 
@@ -572,4 +575,20 @@ describe("t215 bolt dag self-heal", () => {
     );
     expect(r.stderr).toBe("");
   }, 30000);
+
+  test("13: Unit names that collide after case folding are rejected", () => {
+    const parsed = parseBoltDag(`\`\`\`yaml
+units:
+  - name: api
+    depends_on: []
+  - name: API
+    depends_on: []
+\`\`\`
+`);
+    expect(parsed).toEqual({
+      ok: false,
+      reason: "malformed",
+      detail: 'case-folding unit name collision: "api" and "API"',
+    });
+  });
 });

@@ -20,23 +20,23 @@
     "render-surface": "tui"
   },
   "counts": {
-    "total": 607,
+    "total": 683,
     "enumeratedByClass": {
-      "function": 345,
-      "audit": 86,
+      "function": 396,
+      "audit": 89,
       "scope": 11,
       "stage": 33,
       "hook": 17,
-      "subcommand": 108,
+      "subcommand": 130,
       "render-surface": 7
     },
     "coveredByClass": {
-      "function": 171,
-      "audit": 44,
+      "function": 220,
+      "audit": 47,
       "scope": 11,
       "stage": 11,
       "hook": 17,
-      "subcommand": 96,
+      "subcommand": 117,
       "render-surface": 7
     }
   },
@@ -797,6 +797,42 @@
     },
     {
       "unitClass": "audit",
+      "unitId": "UNIT_GATE_RHYTHM_SET",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t314-team-unit-progress-gates.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "UNIT_MERGED",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t316-team-unit-merge.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
+      "unitId": "UNIT_OWNERSHIP_SET",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t314-team-unit-progress-gates.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "audit",
       "unitId": "UNIT_PAUSED",
       "minMechanism": "none",
       "coveredBy": [
@@ -1294,6 +1330,30 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:buildTeamConstructionBoard",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t317-team-dispatcher.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:buildTeamConstructionBoardForIntent",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t317-team-dispatcher.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:canonicalExportJson",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1351,11 +1411,83 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:CLAIM_ACTIVITY_STALE_HOURS",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t317-team-dispatcher.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:CLAIM_GENERATIONS_FILE",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t315-team-unit-claims.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:CLAIM_REGISTRY_CACHE_FILE",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t315-team-unit-claims.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:claimAttemptFields",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t315-team-unit-claims.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:claimCopilotCommand",
       "minMechanism": "none",
       "coveredBy": [
         {
           "file": "tests/unit/t249-copilot-adapter.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:claimGenerationsPath",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t315-team-unit-claims.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:claimRegistryCachePath",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t315-team-unit-claims.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -1414,6 +1546,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:clearClaimGeneration",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t315-team-unit-claims.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:clearSessionIntentHandoff",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1427,6 +1571,18 @@
         {
           "file": "tests/unit/t167-session-intent-helpers.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:clearUnitScopeStamp",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t315-team-unit-claims.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -1724,6 +1880,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:effectiveUnitGateRhythm",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t315-team-unit-claims.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:emitError",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1786,6 +1954,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:ensureCloneId",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t315-team-unit-claims.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:ensureDirSync",
       "minMechanism": "none",
       "coveredBy": [],
@@ -1820,6 +2000,18 @@
         {
           "file": "tests/unit/t109.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:eventMatchesClaimAttempt",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t315-team-unit-claims.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -2039,6 +2231,25 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:hasAnyUnitClaimRefs",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t315-team-unit-claims.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:hasAnyUnitMergeTransactions",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:hasCurrentSharedResumeWait",
       "minMechanism": "none",
       "coveredBy": [
@@ -2247,6 +2458,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:invalidateLiveClaimPayloadCache",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t315-team-unit-claims.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:isAutonomousConstructionDecision",
       "minMechanism": "none",
       "coveredBy": [
@@ -2377,10 +2600,34 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:isTeamUnitOwnership",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t314-team-unit-progress-gates.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:isValidRepoName",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:isWalkingSkeletonUnitOnMain",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t315-team-unit-claims.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -2675,6 +2922,18 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:localUnitClaimOverviewForIntent",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t317-team-dispatcher.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -3189,6 +3448,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:readApplicableTeamUnitScopeStamp",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t315-team-unit-claims.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:readAtomicReplacedFileNoFollowOrThrow",
       "minMechanism": "none",
       "coveredBy": [],
@@ -3201,6 +3472,18 @@
       "coveredBy": [
         {
           "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readClaimGenerations",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t315-team-unit-claims.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -3257,6 +3540,54 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readUnitClaimRegistryCache",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t315-team-unit-claims.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readUnitGateRhythm",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t314-team-unit-progress-gates.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readUnitMergeTransaction",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t316-team-unit-merge.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:readUnitScopeStamp",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t315-team-unit-claims.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -3407,6 +3738,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:renderTeamConstructionBoard",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t317-team-dispatcher.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:replaceSection",
       "minMechanism": "none",
       "coveredBy": [
@@ -3431,6 +3774,18 @@
       "coveredBy": [
         {
           "file": "tests/integration/t166-multi-repo-construction.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:requireLiveClaimForTeamUnit",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t315-team-unit-claims.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -4137,10 +4492,34 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:UNIT_GATE_RHYTHM_FIELD",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t314-team-unit-progress-gates.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:UNIT_KINDS",
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:UNIT_MERGE_DIR",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t316-team-unit-merge.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -4155,6 +4534,66 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:UNIT_OWNERSHIP_FIELD",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t314-team-unit-progress-gates.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:UNIT_PARKED_FILE",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t315-team-unit-claims.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:UNIT_PARTICIPANT_FILE",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t315-team-unit-claims.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:UNIT_RELEASE_PENDING_FILE",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t315-team-unit-claims.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:UNIT_SCOPE_FILE",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t315-team-unit-claims.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "function",
@@ -4177,11 +4616,138 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:unitGateStatus",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t314-team-unit-progress-gates.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:unitLifecycleReceiptsInUse",
       "minMechanism": "none",
       "coveredBy": [
         {
           "file": "tests/unit/t260-unit-lifecycle-receipts.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:unitLifecycleSnapshot",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t314-team-unit-progress-gates.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:unitMajorConstructionStageSlugs",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t314-team-unit-progress-gates.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:unitMergedReceipts",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t316-team-unit-merge.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:unitMergeTransactionPath",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t316-team-unit-merge.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:unitMergeTransactions",
+      "minMechanism": "none",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:unitMergeTransactionsForIdentity",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t317-team-dispatcher.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:unitParkedPath",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t315-team-unit-claims.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:unitParticipantPath",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t315-team-unit-claims.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:unitReleasePendingPath",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t315-team-unit-claims.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:unitScopePath",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t315-team-unit-claims.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -4242,6 +4808,18 @@
         {
           "file": "tests/unit/t213-scope-cost-summary.test.ts",
           "mechanism": "none"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:validateLiveUnitScope",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t315-team-unit-claims.test.ts",
+          "mechanism": "cli"
         }
       ],
       "status": "covered"
@@ -4373,6 +4951,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:worktreeClaimBoundaryMatches",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t315-team-unit-claims.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:worktreeDocsDir",
       "minMechanism": "none",
       "coveredBy": [],
@@ -4430,6 +5020,18 @@
     },
     {
       "unitClass": "function",
+      "unitId": "function:writeClaimGeneration",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t315-team-unit-claims.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
       "unitId": "function:writeCurrentSessionId",
       "minMechanism": "none",
       "coveredBy": [],
@@ -4472,6 +5074,42 @@
       "minMechanism": "none",
       "coveredBy": [],
       "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:writeUnitClaimRegistryCache",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t315-team-unit-claims.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:writeUnitMergeTransaction",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t316-team-unit-merge.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "function",
+      "unitId": "function:writeUnitScopeStamp",
+      "minMechanism": "none",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t315-team-unit-claims.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
     },
     {
       "unitClass": "hook",
@@ -6109,6 +6747,221 @@
     },
     {
       "unitClass": "subcommand",
+      "unitId": "aidlc-orchestrate continue",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t248-steering-content-delivery.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t283-copilot-engine-cursor.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-orchestrate next",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t120-classify-roundtrip.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t127-single-stage-invariant.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t128-custom-runner.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t135-invoke-swarm.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t171-birth-gate-registry.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t304-loopback-review-receipt-replay.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t307-loopback-unitmajor-replay.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t315-team-unit-claims.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t114-orchestrate-next.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t116-directive-path-resolution.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t179-orchestrate-rollforward-guard.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t186-foreach-per-unit-iteration.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t198-compose-surfaces.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t201-swarm-batch-advance.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t202-gate-next-stage.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t206-optional-produces-coverage.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t208-unit-kind-pruning.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t209-unit-major-iteration.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t210-iteration-knob-default.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t214-routing-cost-strings.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t215-bolt-dag-selfheal.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t248-steering-content-delivery.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t272-unit-major-code-gen.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t278-per-unit-wave.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t290-code-gen-unit-test-instructions-coverage.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t302-protocol-modules.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t304-run-stage-memory-bootstrap.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t314-team-unit-progress-gates.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-orchestrate park",
+      "minMechanism": "cli",
+      "coveredBy": [],
+      "status": "UNCOVERED"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-orchestrate report",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t120-classify-roundtrip.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t127-single-stage-invariant.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t238-user-stories-mob.sdk.test.ts",
+          "mechanism": "sdk"
+        },
+        {
+          "file": "tests/integration/t304-loopback-review-receipt-replay.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/integration/t307-loopback-unitmajor-replay.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t186-foreach-per-unit-iteration.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t206-optional-produces-coverage.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t208-unit-kind-pruning.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t209-unit-major-iteration.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t215-bolt-dag-selfheal.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t236-ensemble-evidence-gate.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t272-unit-major-code-gen.test.ts",
+          "mechanism": "cli"
+        },
+        {
+          "file": "tests/unit/t314-team-unit-progress-gates.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-orchestrate team-board",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t317-team-dispatcher.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
       "unitId": "aidlc-runtime compile",
       "minMechanism": "cli",
       "coveredBy": [
@@ -6375,6 +7228,18 @@
     },
     {
       "unitClass": "subcommand",
+      "unitId": "aidlc-state fold-unit-merge",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t316-team-unit-merge.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
       "unitId": "aidlc-state fork",
       "minMechanism": "cli",
       "coveredBy": [
@@ -6479,6 +7344,18 @@
     },
     {
       "unitClass": "subcommand",
+      "unitId": "aidlc-state refresh-unit-progress",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t314-team-unit-progress-gates.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
       "unitId": "aidlc-state reject",
       "minMechanism": "cli",
       "coveredBy": [
@@ -6571,6 +7448,30 @@
     },
     {
       "unitClass": "subcommand",
+      "unitId": "aidlc-state set-unit-gate-rhythm",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t314-team-unit-progress-gates.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-state set-unit-ownership",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/unit/t314-team-unit-progress-gates.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
       "unitId": "aidlc-state skip",
       "minMechanism": "cli",
       "coveredBy": [
@@ -6580,6 +7481,18 @@
         },
         {
           "file": "tests/unit/t17.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-state sync-unit-scope-stage",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t315-team-unit-claims.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -6608,6 +7521,126 @@
       "coveredBy": [
         {
           "file": "tests/unit/t17.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-unit claim",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t315-team-unit-claims.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-unit gate",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t316-team-unit-merge.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-unit land",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t316-team-unit-merge.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-unit merge-status",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t316-team-unit-merge.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-unit participate",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t315-team-unit-claims.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-unit pin",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t316-team-unit-merge.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-unit publish",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t316-team-unit-merge.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-unit release",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t315-team-unit-claims.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-unit status",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t315-team-unit-claims.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-utility claim",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t315-team-unit-claims.test.ts",
           "mechanism": "cli"
         }
       ],
@@ -6951,6 +7984,18 @@
     },
     {
       "unitClass": "subcommand",
+      "unitId": "aidlc-utility participate",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t315-team-unit-claims.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
       "unitId": "aidlc-utility plugin-list",
       "minMechanism": "cli",
       "coveredBy": [
@@ -6996,6 +8041,18 @@
         },
         {
           "file": "tests/unit/t232-phase-progress-flip.test.ts",
+          "mechanism": "cli"
+        }
+      ],
+      "status": "covered"
+    },
+    {
+      "unitClass": "subcommand",
+      "unitId": "aidlc-utility release",
+      "minMechanism": "cli",
+      "coveredBy": [
+        {
+          "file": "tests/integration/t315-team-unit-claims.test.ts",
           "mechanism": "cli"
         }
       ],

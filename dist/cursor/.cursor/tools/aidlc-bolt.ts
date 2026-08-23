@@ -44,21 +44,55 @@ import { appendAuditEntry, appendAuditEntryUnlocked } from "./aidlc-audit.ts";
 import {
   emitError,
   errorMessage,
+  claimAttemptFields,
   getField,
   holdsAuditLock,
   humanActedSinceGate,
   humanPresenceGuardDisabled,
+  isTeamUnitOwnership,
+  isWalkingSkeletonUnitOnMain,
   relativeRecordDir,
   readStateFile,
+  requireLiveClaimForTeamUnit,
+  resolveBoltDag,
   resolveProjectDir,
   setFieldStrict,
   setOrInsertField,
+  slugify,
+  validateLiveUnitScope,
   withAuditLock,
   worktreePath,
   worktreeStateFilePath,
   writeStateFile,
 } from "./aidlc-lib.js";
 import { compiledExecutable } from "./aidlc-runtime-paths.ts";
+
+function resolveTeamUnitSlug(
+  projectDir: string,
+  name: string,
+  explicitSlug?: string,
+): string {
+  const dag = resolveBoltDag(projectDir);
+  if (dag.state !== "ok") {
+    error("Team-owned Bolt starts require a valid authoritative Unit DAG.");
+  }
+  if (explicitSlug) {
+    if (!dag.units.includes(explicitSlug)) {
+      error(`Unit slug "${explicitSlug}" is not in the authoritative Unit DAG.`);
+    }
+    return explicitSlug;
+  }
+  const normalized = slugify(name);
+  const matches = dag.units.filter(
+    (unit) => unit === name || unit === normalized || slugify(unit) === normalized,
+  );
+  if (matches.length !== 1) {
+    error(
+      `Cannot resolve Bolt name "${name}" to exactly one authoritative Unit slug; pass --slug <unit>.`,
+    );
+  }
+  return matches[0];
+}
 
 function emitAudit(
   pd: string,
@@ -206,6 +240,18 @@ function handleStart(args: string[]): void {
   const pd = resolveProjectDir(projectDir);
   const walkingSkeleton = flags["walking-skeleton"] === "true";
   const useWorktree = booleans.has("worktree");
+  let stateContent: string | null = null;
+  try {
+    stateContent = readStateFile(pd);
+  } catch (e) {
+    if (useWorktree) {
+      failJson("start-worktree", flags.slug, "state-read-failed", errorMessage(e));
+    }
+  }
+  const teamOwnership = isTeamUnitOwnership(stateContent);
+  const unitSlug = teamOwnership && !flags.name.includes(",")
+    ? resolveTeamUnitSlug(pd, flags.name, flags.slug)
+    : flags.slug ?? (!flags.name.includes(",") ? flags.name : undefined);
 
   if (useWorktree) {
     if (!flags.slug) {
@@ -217,15 +263,18 @@ function handleStart(args: string[]): void {
       );
     }
   }
-
-  // Validate state-file shape FIRST. setFieldStrict-equivalent: read state
-  // and confirm we can find it; if not, fail before any audit emit so a
-  // missing state file doesn't leave an orphan BOLT_STARTED.
-  if (useWorktree) {
-    try {
-      readStateFile(pd);
-    } catch (e) {
-      failJson("start-worktree", flags.slug, "state-read-failed", errorMessage(e));
+  if (teamOwnership) {
+    if (!unitSlug) {
+      error("Team-owned Bolt starts require one resolvable Unit slug.");
+    }
+    if (walkingSkeleton) {
+      if (!isWalkingSkeletonUnitOnMain(pd, unitSlug)) {
+        error(
+          `Walking-skeleton bypass is valid only for the first DAG Unit on unscoped main; "${unitSlug}" does not qualify.`,
+        );
+      }
+    } else {
+      validateLiveUnitScope(pd, unitSlug);
     }
   }
 
@@ -238,9 +287,10 @@ function handleStart(args: string[]): void {
       "Bolt names": flags.name,
       "Batch number": flags.batch,
       "Walking skeleton": String(walkingSkeleton),
+      ...claimAttemptFields(pd, unitSlug),
     };
-    if (useWorktree) {
-      fields["Bolt slug"] = flags.slug;
+    if (useWorktree || teamOwnership) {
+      fields["Bolt slug"] = unitSlug!;
     }
     emitAudit(pd, "BOLT_STARTED", fields, flags.intent, flags.space);
   } catch (e) {
@@ -272,6 +322,7 @@ function handleStart(args: string[]): void {
     "--slug",
     flags.slug,
     ...selectorArgs(flags),
+    ...(walkingSkeleton ? ["--walking-skeleton-main"] : []),
   ]);
   if (!stateForkResult.ok) {
     const reason =
@@ -291,6 +342,7 @@ function handleStart(args: string[]): void {
     "--slug",
     flags.slug,
     ...selectorArgs(flags),
+    ...(walkingSkeleton ? ["--walking-skeleton-main"] : []),
   ]);
   if (!auditForkResult.ok) {
     const reason =
@@ -313,6 +365,7 @@ function handleStart(args: string[]): void {
     "--slug",
     flags.slug,
     ...selectorArgs(flags),
+    ...(walkingSkeleton ? ["--walking-skeleton-main"] : []),
   ]);
   if (!fragmentForkResult.ok) {
     const reason =
@@ -366,6 +419,18 @@ function handleComplete(args: string[]): void {
 
   const pd = resolveProjectDir(projectDir);
   const useMerge = booleans.has("merge");
+  let stateContent: string | null = null;
+  try {
+    stateContent = readStateFile(pd);
+  } catch {
+    // Legacy non-worktree completion can emit against an audit-only fixture.
+  }
+  const teamOwnership = isTeamUnitOwnership(stateContent);
+  const unitSlug = teamOwnership && !flags.name.includes(",")
+    ? resolveTeamUnitSlug(pd, flags.name, flags.slug)
+    : flags.slug ?? (!flags.name.includes(",") ? flags.name : undefined);
+  const walkingSkeletonMain =
+    teamOwnership && !!unitSlug && isWalkingSkeletonUnitOnMain(pd, unitSlug);
 
   if (useMerge) {
     if (!flags.slug) {
@@ -376,6 +441,11 @@ function handleComplete(args: string[]): void {
         `--merge requires a single bolt name; got csv: "${flags.name}". Issue one complete --merge per bolt.`
       );
     }
+    requireLiveClaimForTeamUnit(pd, unitSlug!, {
+      intent: flags.intent,
+      space: flags.space,
+      walkingSkeletonMain: true,
+    });
     // HOLD-MERGE invariant enforcement.
     // SKILL.md U5's multi-failure halt-and-ask sequence sets `Merge-Held: true`
     // on each successful Bolt's per-Bolt forked state file before rendering
@@ -402,6 +472,7 @@ function handleComplete(args: string[]): void {
     if (useMerge) {
       fields["Bolt slug"] = flags.slug;
     }
+    Object.assign(fields, claimAttemptFields(pd, unitSlug));
     emitAudit(pd, "BOLT_COMPLETED", fields, flags.intent, flags.space);
   } catch (e) {
     if (useMerge) {
@@ -424,6 +495,7 @@ function handleComplete(args: string[]): void {
     "--slug",
     flags.slug,
     ...selectorArgs(flags),
+    ...(walkingSkeletonMain ? ["--walking-skeleton-main"] : []),
   ]);
   if (!stateMergeResult.ok) {
     const reason =
@@ -444,6 +516,7 @@ function handleComplete(args: string[]): void {
     "--slug",
     flags.slug,
     ...selectorArgs(flags),
+    ...(walkingSkeletonMain ? ["--walking-skeleton-main"] : []),
   ]);
   if (!auditMergeResult.ok) {
     const reason =
@@ -467,6 +540,7 @@ function handleComplete(args: string[]): void {
     "--slug",
     flags.slug,
     ...selectorArgs(flags),
+    ...(walkingSkeletonMain ? ["--walking-skeleton-main"] : []),
   ]);
   if (!fragmentMergeResult.ok) {
     const reason =
@@ -521,6 +595,7 @@ function handleFail(args: string[]): void {
   if (flags.slug) {
     fields["Bolt slug"] = flags.slug;
   }
+  Object.assign(fields, claimAttemptFields(pd, flags.slug ?? flags.name));
   if (flags["succeeded-siblings"]) {
     fields["Succeeded siblings"] = flags["succeeded-siblings"];
   }
@@ -596,6 +671,7 @@ function handleAbort(args: string[]): void {
       "Bolt slug": flags.slug,
       "Error summary": `aborted: ${flags.reason}`,
       Reason: "aborted",
+      ...claimAttemptFields(pd, flags.slug),
     }, flags.intent, flags.space);
   } catch (e) {
     error(`Audit emission failed: ${errorMessage(e)}`);
@@ -700,12 +776,18 @@ function setMergeHeld(pd: string, slug: string, held: boolean, intent?: string, 
 
 // --- Subcommand: dispatch-event ---
 // Usage: aidlc-bolt dispatch-event --event MERGE_DISPATCH_INVOKED --slug <slug>
+//                                  [--pinned-oid <40-hex>
+//                                   --attempt-generation <positive-int>]
 //                                  --practices-excerpt <text>
 //        aidlc-bolt dispatch-event --event MERGE_DISPATCH_RETURNED --slug <slug>
+//                                  [--pinned-oid <40-hex>
+//                                   --attempt-generation <positive-int>]
 //                                  --strategy <squash|merge|rebase>
 //                                  --target <branch> --confidence <0-1>
 //                                  --notes <text>
 //        aidlc-bolt dispatch-event --event MERGE_DISPATCH_FALLBACK --slug <slug>
+//                                  [--pinned-oid <40-hex>
+//                                   --attempt-generation <positive-int>]
 //                                  --reason <enum> --defaults <text>
 //
 // Wires the three MERGE_DISPATCH_* events by emitting via
@@ -726,6 +808,25 @@ function handleDispatchEvent(args: string[]): void {
   if (!flags.slug) error("Missing --slug <kebab-slug>");
 
   const pd = resolveProjectDir(projectDir);
+  const pinnedOid = flags["pinned-oid"];
+  const attemptGeneration = flags["attempt-generation"];
+  if (
+    (pinnedOid === undefined) !== (attemptGeneration === undefined) ||
+    (pinnedOid !== undefined && !/^[0-9a-f]{40}$/.test(pinnedOid)) ||
+    (
+      attemptGeneration !== undefined &&
+      !/^[1-9][0-9]*$/.test(attemptGeneration)
+    )
+  ) {
+    error(
+      "--pinned-oid <40-hex> and --attempt-generation <positive integer> must be supplied together.",
+    );
+  }
+  const transactionFields: Record<string, string> = {};
+  if (pinnedOid && attemptGeneration) {
+    transactionFields["Pinned OID"] = pinnedOid;
+    transactionFields["Attempt Generation"] = attemptGeneration;
+  }
 
   // Per-variant flag validation + literal emit. Fields populate per the
   // schema at audit-format.md:147-149.
@@ -737,6 +838,7 @@ function handleDispatchEvent(args: string[]): void {
       const fields: Record<string, string> = {
         "Bolt slug": flags.slug,
         "Practices section excerpt": flags["practices-excerpt"],
+        ...transactionFields,
       };
       try {
         emitAudit(pd, "MERGE_DISPATCH_INVOKED", fields);
@@ -764,6 +866,7 @@ function handleDispatchEvent(args: string[]): void {
         "Target branch": flags.target,
         Confidence: flags.confidence,
         Notes: flags.notes,
+        ...transactionFields,
       };
       try {
         emitAudit(pd, "MERGE_DISPATCH_RETURNED", fields);
@@ -780,6 +883,7 @@ function handleDispatchEvent(args: string[]): void {
         "Bolt slug": flags.slug,
         "Fallback reason": flags.reason,
         "Defaults applied": flags.defaults,
+        ...transactionFields,
       };
       try {
         emitAudit(pd, "MERGE_DISPATCH_FALLBACK", fields);
@@ -934,6 +1038,7 @@ function failBolt(
       "Failed Bolt": name,
       "Bolt slug": slug,
       "Error summary": `${reasonEnum}: ${detail}`,
+      ...claimAttemptFields(pd, slug),
     });
   } catch {
     /* noop — original error will surface via failJson next */

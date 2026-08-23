@@ -1127,6 +1127,39 @@ describe("t249 Copilot hook adapter (live-captured payload fixtures)", () => {
     expect(marker(repeated).stop_count).toBe(2);
   }, 60000);
 
+  test("21a: terminal notice output is captured, retained, and allows Copilot Stop", () => {
+    const dir = orchestrationProject();
+    const session = "notice-owner";
+    const attempt = "notice-attempt";
+    const spec = commandSpec(dir, "direct", ["next"]);
+    const pre = runAdapter(
+      dir,
+      "guard-tool-call",
+      commandPayload(dir, session, spec.text, attempt),
+    );
+    const rewritten = rewrittenCommand(pre);
+    expect(rewritten).toContain(`--aidlc-attempt-id ${attempt}`);
+    const notice = '{"kind":"notice","message":"Team Construction board"}';
+    const post = runAdapter(
+      dir,
+      "post-tool",
+      commandPayload(dir, session, rewritten, attempt, true, notice),
+    );
+    expect(post.code).toBe(0);
+    expect(marker(dir)).toMatchObject({
+      kind: "notice",
+      delivery: "delivered",
+      active_attempt: { id: attempt, status: "settled" },
+    });
+    expect(
+      runAdapter(dir, "continue-workflow", {
+        ...FIXTURES.stop,
+        cwd: dir,
+        session_id: session,
+      }).stdout,
+    ).toBe("");
+  });
+
   test.skipIf(COMPILED_BINARY === null)("21b: real compiled dispatcher normalizes next/continue and --resume shorthand", () => {
     const dir = orchestrationProject();
     const session = "real-compiled-owner";

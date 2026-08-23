@@ -1,6 +1,19 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.70] - 2026-08-23
+
+Team-owned unit-major Construction can now fan out safely across clones or sibling worktrees, publish exact candidates, and converge through a pinned human-gated merge transaction with a deterministic dispatcher. **Upgrade:** refresh your `dist/<harness>/` shell; existing workflows remain solo unless delivery planning explicitly enables team ownership.
+
+* `aidlc state set-unit-ownership <team|solo>` and `set-unit-gate-rhythm <per-stage|unit-end>` enable the mode; the engine derives Unit Progress from artifacts, current receipts, reviews, gates, claims, and `UNIT_MERGED` evidence, never hand-edited table cells.
+* `aidlc unit claim|release|participate` provides atomic git-native ownership with generation-bumping tombstones, checkout-local routing, participant picking, partial-clone-safe payload hydration, and claim-bound fork/lifecycle authority.
+* `aidlc unit publish|pin|gate|land` publishes a claim-ref candidate and converges it through an exact OID/generation, main-shard human merge gate, candidate-exact merge, state fold, and final `UNIT_MERGED` receipt. Republish after rebasing onto the current integration branch to refresh the candidate base; pin and land reject sibling-Unit record changes, extra/foreign shards, non-allowlisted or wrong-attempt audit rows, and unrelated dirty files while surfacing product-source paths for human review.
+* Merge and release recovery journals are isolated by space, intent UUID, and Unit. A release after the git landing step has one explicit recovery: inspect the landed commit, then run `aidlc unit land <unit> --accept-released-attempt --user-input "<human acknowledgment>"`; the exact immediate tombstone, fresh main-shard human turn, acknowledgment, journal, and main audit are bound before state folding. Merge gate and landing checks fail closed while the claim registry is offline without deleting the checkout's recovery stamp.
+* Unscoped main renders a terminal Team Construction board with the derived grid, observed local claims, blockers, merge readiness, and exact claim/gate/land recovery commands. `/aidlc --status` renders the same read-only snapshot from main or a scoped checkout, including explicit space/intent selection.
+* The multi-intent picker annotates team claimability, parked work, and completed intents. `/aidlc --doctor` detects stale stamps, 24-hour observed-ref inactivity, missing observation baselines, and orphan local claim refs without fetching or auto-releasing.
+* Copilot retains terminal Team Construction `notice` directives, shared hook classifiers recognize `aidlc unit`, and `UNIT_MERGED` refreshes runtime state. Unit DAGs reject case-fold collisions such as `api`/`API`; intents with recorded sibling repos reject team ownership before state changes.
+* Solo, knob-absent, claim-less team, and ordinary scoped execution retain their existing behavior; team Stop-hook probes remain write-free while their steering continuation is executable by the ordinary single-use `continue` flow.
+
 ## [2.6.65] - 2026-08-23
 
 Stage graph compilation now rejects ambiguous producers before consumers can resolve an artifact by file order. **Upgrade:** refresh your `dist/<harness>/` shell; existing custom stages or plugins that declare the same consumed artifact in `produces` or `optional_produces` must rename one output or update the consumer.
