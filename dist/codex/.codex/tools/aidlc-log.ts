@@ -47,6 +47,13 @@ import {
   workspaceSourceFingerprint,
 } from "./aidlc-lib.js";
 import type { ReviewClass } from "./aidlc-lib.js";
+import {
+  codeGenerationPlanApprovalQuestionEvidence,
+  type CodeGenerationTarget,
+  PLAN_APPROVAL_CHECKPOINT,
+  recordPlanApprovalChallenge,
+  recordPlanApprovalReceipt,
+} from "./aidlc-testing-posture.js";
 
 // Resolve the project dir AND assert that an active workflow exists before any
 // audit emit. WHY: aidlc-log is orchestrator-called per-question and threads no
@@ -101,7 +108,7 @@ function parseFlags(
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a.startsWith("--")) {
-      if (a === "--single" || a === "--retry-pending") {
+      if (a === "--single" || a === "--retry-pending" || a === "--stage-level") {
         flags[a.slice(2)] = "true";
         continue;
       }
@@ -166,6 +173,33 @@ function summaryQuestionEvidence(
   };
 }
 
+function planApprovalTarget(flags: Record<string, string>): CodeGenerationTarget {
+  const unit = flags.unit?.trim();
+  const stageLevel = flags["stage-level"] === "true";
+  if (unit && stageLevel) {
+    error("Plan Approval accepts exactly one of --unit <unit> or --stage-level.");
+  }
+  if (unit) return { unit };
+  if (stageLevel) return { unit: null };
+  error("Plan Approval requires exactly one of --unit <unit> or --stage-level.");
+}
+
+function planApprovalFields(
+  evidence: ReturnType<typeof codeGenerationPlanApprovalQuestionEvidence>,
+): Record<string, string> {
+  return {
+    Checkpoint: PLAN_APPROVAL_CHECKPOINT,
+    "Plan Target": evidence.authority.targetId,
+    Intent: evidence.authority.intentId,
+    "Directive Epoch": evidence.authority.directiveEpoch,
+    "Run floor": evidence.authority.runFloor,
+    "Approval Fingerprint": evidence.fingerprint,
+    "Questions File": evidence.questionsRelativePath,
+    "Questions SHA-256": evidence.questionsSha256,
+    "Prompt SHA-256": evidence.promptSha256,
+  };
+}
+
 // --- Subcommand: decision ---
 // Usage: aidlc-log decision --stage <slug> --decision <text> [--options <csv>]
 //   [--rationale <text>] [--checkpoint summary-confirmation
@@ -178,10 +212,11 @@ function handleDecision(args: string[]): void {
   if (!flags.decision) error("Missing --decision <text>");
   if (
     flags.checkpoint !== undefined &&
-    flags.checkpoint !== "summary-confirmation"
+    flags.checkpoint !== "summary-confirmation" &&
+    flags.checkpoint !== "plan-approval"
   ) {
     error(
-      `Unknown --checkpoint "${flags.checkpoint}". Accepted: summary-confirmation`,
+      `Unknown --checkpoint "${flags.checkpoint}". Accepted: summary-confirmation, plan-approval`,
     );
   }
 
@@ -190,15 +225,43 @@ function handleDecision(args: string[]): void {
     flags.checkpoint === "summary-confirmation"
       ? summaryQuestionEvidence(pd, flags, "")
       : null;
+  const planEvidence =
+    flags.checkpoint === "plan-approval"
+      ? codeGenerationPlanApprovalQuestionEvidence(
+          pd,
+          planApprovalTarget(flags),
+          flags["questions-file"] ?? "",
+          "",
+        )
+      : null;
   const fields: Record<string, string> = {
     Stage: flags.stage,
     Decision: flags.decision,
   };
-  if (flags.options) fields.Options = flags.options;
+  if (flags.options) {
+    fields.Options =
+      planEvidence &&
+          (
+            flags["hash-option-labels"] === "true" ||
+            flags["legacy-directive-options"] === "true"
+          )
+        ? "[protected exact choices]"
+        : flags.options;
+  }
   if (flags.rationale) fields.Rationale = flags.rationale;
   if (flags.checkpoint === "summary-confirmation") {
     fields.Checkpoint = SUMMARY_CONFIRMATION_CHECKPOINT;
     fields["Questions File"] = summaryEvidence!.relativePath;
+  }
+  if (planEvidence) Object.assign(fields, planApprovalFields(planEvidence));
+  if (planEvidence) {
+    const session = flags.session?.trim();
+    if (!session) {
+      error(
+        "Plan Approval requires --session <id> from the invoking SessionStart context.",
+      );
+    }
+    fields.Session = session;
   }
   if (flags.unit) fields.Unit = flags.unit;
   if (flags.single === "true") fields.Workflow = `single-stage:${flags.stage}`;
@@ -207,6 +270,28 @@ function handleDecision(args: string[]): void {
     emitAudit(pd, "DECISION_RECORDED", fields);
   } catch (e) {
     error(`Audit emission failed: ${errorMessage(e)}`);
+  }
+  if (planEvidence) {
+    try {
+      const options = (flags.options ?? "")
+        .split(",")
+        .map((option) => option.trim())
+        .filter(Boolean);
+      if (options.length !== 2) {
+        error("Plan Approval decision requires exactly two offered options");
+      }
+      recordPlanApprovalChallenge(
+        pd,
+        planEvidence,
+        fields.Session,
+        [options[0], options[1]],
+        flags["exact-option-labels"] === "true",
+        flags["hash-option-labels"] === "true",
+        flags["legacy-directive-options"] === "true",
+      );
+    } catch (e) {
+      error(`Plan Approval challenge creation failed: ${errorMessage(e)}`);
+    }
   }
 
   console.log(
@@ -360,13 +445,15 @@ function handleAnswer(args: string[]): void {
 
   if (
     flags.checkpoint !== undefined &&
-    flags.checkpoint !== "summary-confirmation"
+    flags.checkpoint !== "summary-confirmation" &&
+    flags.checkpoint !== "plan-approval"
   ) {
     error(
-      `Unknown --checkpoint "${flags.checkpoint}". Accepted: summary-confirmation`,
+      `Unknown --checkpoint "${flags.checkpoint}". Accepted: summary-confirmation, plan-approval`,
     );
   }
   const summaryCheckpoint = flags.checkpoint === "summary-confirmation";
+  const planCheckpoint = flags.checkpoint === "plan-approval";
   if (
     summaryCheckpoint &&
     flags.details !== "Looks correct" &&
@@ -376,6 +463,16 @@ function handleAnswer(args: string[]): void {
       `Refusing to record summary confirmation: received reply ${formatReceivedReply(flags.details)}: ` +
         'it did not match an offered choice. Valid choices are "Looks correct" or ' +
         '"Request changes". Re-present those choices and wait for the human to choose one.',
+    );
+  }
+  if (
+    planCheckpoint &&
+    flags.details !== "Approve Plan" &&
+    flags.details !== "Request Changes"
+  ) {
+    error(
+      `Refusing to record Plan Approval: received reply ${formatReceivedReply(flags.details)}. ` +
+        'Valid choices are "Approve Plan" or "Request Changes".',
     );
   }
 
@@ -393,6 +490,9 @@ function handleAnswer(args: string[]): void {
   const summaryEvidence = summaryCheckpoint
     ? summaryQuestionEvidence(pd, flags, flags.details)
     : null;
+  let planEvidence: ReturnType<
+    typeof codeGenerationPlanApprovalQuestionEvidence
+  > | null = null;
   const fields: Record<string, string> = {
     Stage: flags.stage,
     Details: flags.details,
@@ -411,6 +511,22 @@ function handleAnswer(args: string[]): void {
   // re-create the answer-consumes-the-turn deadlock this branch prevents.
   // appendAuditEntry / emitError re-acquire reentrantly (per-pd depth).
   withAuditLock(pd, () => {
+    if (planCheckpoint) {
+      planEvidence = codeGenerationPlanApprovalQuestionEvidence(
+        pd,
+        planApprovalTarget(flags),
+        flags["questions-file"] ?? "",
+        flags.details as "Approve Plan" | "Request Changes",
+      );
+      Object.assign(fields, planApprovalFields(planEvidence));
+      const session = flags.session?.trim();
+      if (!session) {
+        error(
+          "Plan Approval requires --session <id> from the invoking SessionStart context.",
+        );
+      }
+      fields.Session = session;
+    }
     // Human-presence gate (ledger-event design): the interview answer is
     // a human-judgement event, so require a HUMAN_TURN appended AFTER the last
     // QUESTION_ANSWERED (ledger order) before recording another. The prior
@@ -483,6 +599,39 @@ function handleAnswer(args: string[]): void {
         JSON.stringify({
           emitted: "SUMMARY_CONFIRMATION_RECORDED",
           checkpoint: "summary-confirmation",
+          stage: flags.stage,
+        }),
+      );
+      return;
+    }
+
+    if (planCheckpoint) {
+      try {
+        recordPlanApprovalReceipt(
+          pd,
+          planEvidence!,
+          fields.Session,
+          flags.details as "Approve Plan" | "Request Changes",
+        );
+      } catch (e) {
+        error(`Refusing to record Plan Approval: ${errorMessage(e)}`);
+      }
+      try {
+        if (flags.details === "Approve Plan") {
+          emitAudit(pd, "PLAN_APPROVAL_RECORDED", fields);
+        } else {
+          emitAudit(pd, "QUESTION_ANSWERED", fields);
+        }
+      } catch (e) {
+        error(`Audit emission failed: ${errorMessage(e)}`);
+      }
+      console.log(
+        JSON.stringify({
+          emitted:
+            flags.details === "Approve Plan"
+              ? "PLAN_APPROVAL_RECORDED"
+              : "QUESTION_ANSWERED",
+          checkpoint: "plan-approval",
           stage: flags.stage,
         }),
       );

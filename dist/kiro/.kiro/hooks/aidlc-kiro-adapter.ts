@@ -50,10 +50,8 @@ import {
   humanActedSinceGate,
   humanPresenceGuardDisabled,
   isAutonomousMode,
-  markHumanTurn,
   stateFilePath,
 } from "../tools/aidlc-lib.ts";
-import { appendAuditEntry } from "../tools/aidlc-audit.ts";
 
 const HOOKS_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -334,11 +332,11 @@ if (target === "verb-intercept") {
   // Both writes ride this one seam so the ledger and the marker can never
   // disagree about when a human spoke. See the marker family in aidlc-lib.ts.
   try {
-    const cwd = projectDir;
-    if (existsSync(stateFilePath(cwd))) {
-      appendAuditEntry("HUMAN_TURN", {}, cwd);
-      markHumanTurn(cwd);
-    }
+    runCore("aidlc-record-human-turn.ts", {
+      hook_event_name: "UserPromptSubmit",
+      ...(kiro.session_id ? { session_id: kiro.session_id } : {}),
+      prompt: kiro.prompt ?? "",
+    });
   } catch { /* presence best-effort - record-human-turn never blocks the turn */ }
   if (cmd === null) {
     // Pure, explicit engine reads do not need the model to reconstruct the
@@ -629,16 +627,42 @@ if (target === "state-transition-guard") {
 
 // --- plan-approval-guard: code-generation plan-before-generation (preToolUse) ---
 //
-// Legacy `subagent` calls carry {task, stages: [{role, prompt_template}]};
-// newer direct calls carry the agent in `subagent_<agent>` (or a structured
-// field on `invoke_sub_agent`) and the brief in tool_input.prompt. The shim
-// forwards one Task-shaped payload to the core hook when a dispatch targets
-// the developer agent. Exit 2 + stderr is Kiro's
-// reject contract, forwarded verbatim. Fail-open: a different tool, no
-// developer role in the pipeline, or an unspawnable core hook allows the call.
+// Dispatches normalize to Task. fs_write aliases normalize to Write/Edit and
+// execute_bash normalizes to Bash, matching the same payload family used by
+// review-freeze. Exit 2 + stderr is Kiro's reject contract, forwarded verbatim.
 if (target === "plan-approval-guard") {
   const dispatch = kiroDispatch(kiro);
-  if (!dispatch?.agents.includes("aidlc-developer-agent")) return 0;
+  const tool = kiro.tool_name ?? "";
+  const ti = kiro.tool_input ?? {};
+  const canonical = canonicalTool(tool, ti);
+  let payload: Record<string, unknown>;
+  if (dispatch?.agents.includes("aidlc-developer-agent")) {
+    payload = {
+      hook_event_name: "PreToolUse",
+      tool_name: "Task",
+      tool_input: {
+        subagent_type: "aidlc-developer-agent",
+        prompt: dispatch.prompt,
+      },
+    };
+  } else if (canonical === "Bash") {
+    payload = {
+      hook_event_name: "PreToolUse",
+      tool_name: "Bash",
+      tool_input: { command: (ti.command as string) ?? "" },
+      cwd: projectDir,
+    };
+  } else if (canonical === "Write" || canonical === "Edit" || tool === "delete_file") {
+    const paths = inputPaths(ti);
+    payload = {
+      hook_event_name: "PreToolUse",
+      tool_name: canonical === "Write" ? "Write" : "Edit",
+      tool_input: { file_path: paths[0] ?? "", paths },
+      cwd: projectDir,
+    };
+  } else {
+    return 0;
+  }
   const executable = process.env.AIDLC_COMPILED_EXECUTABLE;
   const command = executable
     ? [executable, "hook", "plan-approval-guard"]
@@ -647,14 +671,7 @@ if (target === "plan-approval-guard") {
     command,
     {
       stdin: Buffer.from(
-        JSON.stringify({
-          hook_event_name: "PreToolUse",
-          tool_name: "Task",
-          tool_input: {
-            subagent_type: "aidlc-developer-agent",
-            prompt: dispatch.prompt,
-          },
-        }),
+        JSON.stringify(payload),
         "utf-8",
       ),
       cwd: childCwd,

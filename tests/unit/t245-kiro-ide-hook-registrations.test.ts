@@ -41,6 +41,7 @@ const EXPECTED_V2_REGISTRATIONS: Array<{
   { file: "aidlc-session-start.json", trigger: "SessionStart", matcher: null, adapterTarget: "session-start" },
   { file: "aidlc-record-human-turn.json", trigger: "UserPromptSubmit", matcher: null, adapterTarget: "record-human-turn" },
   { file: "aidlc-enforce-approval-gate.json", trigger: "PreToolUse", matcher: null, adapterTarget: "enforce-approval-gate" },
+  { file: "aidlc-plan-approval-guard.json", trigger: "PreToolUse", matcher: null, adapterTarget: "plan-approval-guard" },
   { file: "aidlc-write-audit-log.json", trigger: "PostToolUse", matcher: "fs_write|str_replace|fs_append", adapterTarget: "audit-and-sensors" },
   { file: "aidlc-rebuild-stage-graph.json", trigger: "PostToolUse", matcher: "execute_bash", adapterTarget: "rebuild-stage-graph" },
   { file: "aidlc-sync-workflow-state.json", trigger: "PostToolUse", matcher: "execute_bash", adapterTarget: "sync-workflow-state" },
@@ -52,6 +53,7 @@ const EXPECTED_V2_REGISTRATIONS: Array<{
 const EXPECTED_LEGACY_FILES = [
   "aidlc-write-audit-log.kiro.hook",
   "aidlc-enforce-approval-gate.kiro.hook",
+  "aidlc-plan-approval-guard.kiro.hook",
   "aidlc-log-subagent.kiro.hook",
   "aidlc-record-human-turn.kiro.hook",
   "aidlc-rebuild-stage-graph.kiro.hook",

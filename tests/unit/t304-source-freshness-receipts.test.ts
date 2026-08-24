@@ -53,7 +53,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   boltSlugForUnit,
   readAllAuditShards,
@@ -268,7 +268,7 @@ describe("t304 workspace source fingerprint (in-process)", () => {
   test("deterministic, content-addressed, and edit-sensitive", () => {
     const src = seedGitRepo(dir);
     const fp1 = workspaceSourceFingerprint(dir);
-    expect(fp1).toMatch(/^[0-9a-f]{40}$/); // single repo -> the tree sha itself
+    expect(fp1).toMatch(/^[0-9a-f]{64}$/);
     expect(workspaceSourceFingerprint(dir)).toBe(fp1); // deterministic
 
     writeFileSync(src, "export const answer = 43;\n", "utf-8"); // tracked edit
@@ -284,7 +284,7 @@ describe("t304 workspace source fingerprint (in-process)", () => {
     expect(workspaceSourceFingerprint(dir)).toBe(fp1);
   });
 
-  test("never mutates the real index, and returns null off-git", () => {
+  test("never mutates the real index, and fingerprints non-Git workspaces", () => {
     const src = seedGitRepo(dir);
     writeFileSync(src, "export const answer = 99;\n", "utf-8"); // dirty worktree
     workspaceSourceFingerprint(dir);
@@ -296,7 +296,10 @@ describe("t304 workspace source fingerprint (in-process)", () => {
     expect(status).toContain(" M app.ts");
     const plain = mkdtempSync(join(tmpdir(), "t304-plain-"));
     try {
-      expect(workspaceSourceFingerprint(plain)).toBeNull();
+      const first = workspaceSourceFingerprint(plain);
+      expect(first).toMatch(/^[0-9a-f]{64}$/);
+      writeFileSync(join(plain, "app.ts"), "export const plain = true;\n");
+      expect(workspaceSourceFingerprint(plain)).not.toBe(first);
     } finally {
       rmSync(plain, { recursive: true, force: true });
     }
@@ -483,7 +486,7 @@ describe("t304 workspace source fingerprint (in-process)", () => {
     expect(workspaceSourceFingerprint(dir)).not.toBe(fp1);
   });
 
-  test("a filtered tracked symlink never fingerprints bytes outside the repository", () => {
+  test("a tracked symlink binds bytes at its external target", () => {
     seedGitRepo(dir);
     git(dir, ["config", "core.symlinks", "true"]);
     git(dir, ["config", "filter.tidy.clean", "sed 's/[[:space:]]*$//'"]);
@@ -497,13 +500,230 @@ describe("t304 workspace source fingerprint (in-process)", () => {
       const fp = workspaceSourceFingerprint(dir);
       expect(fp).not.toBeNull();
 
-      // The tracked source is the link text, which did not change. Following
-      // the destination here would bind arbitrary bytes outside the repo.
       writeFileSync(external, "external v2\n", "utf-8");
-      expect(workspaceSourceFingerprint(dir)).toBe(fp);
+      expect(workspaceSourceFingerprint(dir)).not.toBe(fp);
     } finally {
       rmSync(external, { force: true });
     }
+  });
+
+  test("ignored application output changes the workspace fingerprint", () => {
+    seedGitRepo(dir);
+    writeFileSync(join(dir, ".gitignore"), "ignored-output.bin\n");
+    const fp = workspaceSourceFingerprint(dir);
+    writeFileSync(join(dir, "ignored-output.bin"), "v1\n");
+    const withIgnored = workspaceSourceFingerprint(dir);
+    expect(withIgnored).not.toBe(fp);
+    writeFileSync(join(dir, "ignored-output.bin"), "v2\n");
+    expect(workspaceSourceFingerprint(dir)).not.toBe(withIgnored);
+  });
+
+  test("dependency, cache, build, log, and virtualenv trees do not churn the source floor", () => {
+    seedGitRepo(dir);
+    writeFileSync(
+      join(dir, ".gitignore"),
+      [".next/", "build/", "dist/", "logs/", ""].join("\n"),
+    );
+    git(dir, ["add", ".gitignore"]);
+    git(dir, ["commit", "-qm", "ignore generated output"]);
+    const baseline = workspaceSourceFingerprint(dir);
+    for (const name of [
+      "node_modules",
+      ".cache",
+      ".next",
+      "build",
+      "dist",
+      "logs",
+      ".venv",
+      "venv",
+    ]) {
+      const nested = join(dir, name, "deep");
+      mkdirSync(nested, { recursive: true });
+      for (let i = 0; i < 100; i++) {
+        writeFileSync(join(nested, `${i}.bin`), `volatile-${name}-${i}\n`);
+      }
+    }
+    mkdirSync(join(dir, ".next", "server"), { recursive: true });
+    writeFileSync(
+      join(dir, ".next", "server", "chunk.js"),
+      "self.__next_chunk = Date.now();\n",
+    );
+    mkdirSync(join(dir, "dist"), { recursive: true });
+    writeFileSync(
+      join(dir, "dist", "app.js"),
+      "globalThis.generatedAt = Date.now();\n",
+    );
+    expect(workspaceSourceFingerprint(dir)).toBe(baseline);
+    mkdirSync(join(dir, "src"), { recursive: true });
+    writeFileSync(join(dir, "src", "ignored-generated.ts"), "export const generated = 1;\n");
+    expect(workspaceSourceFingerprint(dir)).not.toBe(baseline);
+  });
+
+  test("tracked application source remains bound beneath conditional build directory names", () => {
+    seedGitRepo(dir);
+    const source = join(dir, "packages", "compiler", "build", "rules.ts");
+    mkdirSync(dirname(source), { recursive: true });
+    writeFileSync(source, "export const rule = 1;\n");
+    git(dir, ["add", "--", "packages/compiler/build/rules.ts"]);
+    git(dir, ["commit", "-qm", "tracked build source"]);
+    const baseline = workspaceSourceFingerprint(dir);
+    writeFileSync(source, "export const rule = 2;\n");
+    expect(workspaceSourceFingerprint(dir)).not.toBe(baseline);
+  });
+
+  test("external directory symlinks are identity-bound without recursively scanning their contents", () => {
+    seedGitRepo(dir);
+    const external = `${dir}-external-tree`;
+    try {
+      mkdirSync(external, { recursive: true });
+      for (let i = 0; i < 2000; i++) {
+        writeFileSync(join(external, `${i}.bin`), `generated-${i}\n`);
+      }
+      writeFileSync(join(external, "main.tf"), "resource \"x\" \"a\" {}\n");
+      writeFileSync(join(external, "Dockerfile"), "FROM scratch\n");
+      symlinkSync(external, join(dir, "external-dir"), "dir");
+      const started = performance.now();
+      const fingerprint = workspaceSourceFingerprint(dir);
+      expect(performance.now() - started).toBeLessThan(5000);
+      writeFileSync(
+        join(external, "main.tf"),
+        "resource \"x\" \"a\" { count = 2 }\n",
+      );
+      expect(workspaceSourceFingerprint(dir)).not.toBe(fingerprint);
+    } finally {
+      rmSync(external, { recursive: true, force: true });
+    }
+  });
+
+  test("external and ignored source formats outside generated outputs remain bound", () => {
+    seedGitRepo(dir);
+    const cases = [
+      ["worker.exs", "IO.puts(:one)\n", "IO.puts(:two)\n"],
+      ["worker.erl", "-module(one).\n", "-module(two).\n"],
+      ["worker.lua", "return 1\n", "return 2\n"],
+      ["worker.sol", "contract One {}\n", "contract Two {}\n"],
+      ["worker.zig", "pub const one = 1;\n", "pub const two = 2;\n"],
+      ["view.astro", "---\nconst one = 1;\n---\n", "---\nconst two = 2;\n---\n"],
+      ["schema.graphql", "type Query { one: Int }\n", "type Query { two: Int }\n"],
+      ["script.ps1", "Write-Output one\n", "Write-Output two\n"],
+      ["CMakeLists.txt", "project(one)\n", "project(two)\n"],
+      ["core.clj", "(def one 1)\n", "(def two 2)\n"],
+      ["app.fs", "let one = 1\n", "let two = 2\n"],
+      ["main.r", "one <- 1\n", "two <- 2\n"],
+      ["build.gradle", "version = '1'\n", "version = '2'\n"],
+    ] as const;
+    writeFileSync(
+      join(dir, ".gitignore"),
+      `${cases.map(([name]) => `ignored-${name}`).join("\n")}\n`,
+    );
+    git(dir, ["add", ".gitignore"]);
+    git(dir, ["commit", "-qm", "ignore application source fixtures"]);
+
+    for (const [name, before, after] of cases) {
+      const ignored = join(dir, `ignored-${name}`);
+      writeFileSync(ignored, before);
+      const ignoredFingerprint = workspaceSourceFingerprint(dir);
+      writeFileSync(ignored, after);
+      expect(workspaceSourceFingerprint(dir), `ignored ${name}`)
+        .not.toBe(ignoredFingerprint);
+      rmSync(ignored, { force: true });
+
+      const external = `${dir}-external-${name.replace(/[^A-Za-z0-9]/g, "-")}`;
+      const alias = join(dir, `external-${name.replace(/[^A-Za-z0-9]/g, "-")}`);
+      mkdirSync(external, { recursive: true });
+      writeFileSync(join(external, name), before);
+      symlinkSync(external, alias, "dir");
+      const externalFingerprint = workspaceSourceFingerprint(dir);
+      writeFileSync(join(external, name), after);
+      expect(workspaceSourceFingerprint(dir), `external ${name}`)
+        .not.toBe(externalFingerprint);
+      rmSync(alias, { recursive: true, force: true });
+      rmSync(external, { recursive: true, force: true });
+    }
+  }, 30000);
+
+  test("missing Git executable falls back to the filesystem boundary", () => {
+    seedGitRepo(dir);
+    mkdirSync(join(dir, "build"), { recursive: true });
+    writeFileSync(join(dir, "build", "fallback.js"), "export const value = 1;\n");
+    const before = process.env.PATH;
+    process.env.PATH = "";
+    try {
+      const fp = workspaceSourceFingerprint(dir);
+      expect(fp).toMatch(/^[0-9a-f]{64}$/);
+      writeFileSync(join(dir, "app.ts"), "export const answer = 100;\n");
+      expect(workspaceSourceFingerprint(dir)).not.toBe(fp);
+    } finally {
+      process.env.PATH = before;
+    }
+  });
+
+  test("ignored conditional source can be registered without binding sibling generated output", () => {
+    seedGitRepo(dir);
+    writeFileSync(join(dir, ".gitignore"), "dist/\n");
+    writeFileSync(
+      join(dir, ".aidlc-source-paths.json"),
+      `${JSON.stringify({ version: 1, paths: ["dist/worker.js"] }, null, 2)}\n`,
+    );
+    git(dir, ["add", ".gitignore", ".aidlc-source-paths.json"]);
+    git(dir, ["commit", "-qm", "register ignored source"]);
+    mkdirSync(join(dir, "dist"), { recursive: true });
+    writeFileSync(join(dir, "dist", "worker.js"), "export const worker = 1;\n");
+    writeFileSync(join(dir, "dist", "app.js"), "generated(1);\n");
+    const baseline = workspaceSourceFingerprint(dir);
+
+    writeFileSync(join(dir, "dist", "app.js"), "generated(2);\n");
+    expect(workspaceSourceFingerprint(dir)).toBe(baseline);
+
+    writeFileSync(join(dir, "dist", "worker.js"), "export const worker = 2;\n");
+    expect(workspaceSourceFingerprint(dir)).not.toBe(baseline);
+  });
+
+  test("partial multi-repo layouts remain bindable and detect the missing repo appearing", () => {
+    const repoA = join(dir, "repo-a");
+    mkdirSync(repoA, { recursive: true });
+    seedGitRepo(repoA);
+    registerRepos(dir, ["repo-a", "repo-b"]);
+    const partial = workspaceSourceFingerprint(dir);
+    expect(partial).toMatch(/^[0-9a-f]{64}$/);
+    const repoB = join(dir, "repo-b");
+    mkdirSync(repoB, { recursive: true });
+    writeFileSync(join(repoB, "new.ts"), "export const b = true;\n");
+    expect(workspaceSourceFingerprint(dir)).not.toBe(partial);
+  });
+
+  test("registered multi-repo intents bind plan-relevant workspace-root source", () => {
+    const repoA = join(dir, "repo-a");
+    mkdirSync(repoA, { recursive: true });
+    seedGitRepo(repoA);
+    registerRepos(dir, ["repo-a"]);
+    const compose = join(dir, "docker-compose.yml");
+    writeFileSync(compose, "services:\n  api:\n    image: one\n");
+    const baseline = workspaceSourceFingerprint(dir);
+    writeFileSync(compose, "services:\n  api:\n    image: two\n");
+    expect(workspaceSourceFingerprint(dir)).not.toBe(baseline);
+  });
+
+  test("registered repo subsets ignore unrelated sibling repositories but retain roof source", () => {
+    const repoA = join(dir, "repo-a");
+    const repoB = join(dir, "repo-b");
+    mkdirSync(repoA, { recursive: true });
+    mkdirSync(repoB, { recursive: true });
+    seedGitRepo(repoA);
+    seedGitRepo(repoB);
+    registerRepos(dir, ["repo-a"]);
+    const compose = join(dir, "docker-compose.yml");
+    writeFileSync(compose, "services:\n  api:\n    image: one\n");
+    const baseline = workspaceSourceFingerprint(dir);
+
+    writeFileSync(
+      join(repoB, "app.ts"),
+      "export const unrelated = true;\n",
+    );
+    expect(workspaceSourceFingerprint(dir)).toBe(baseline);
+
+    writeFileSync(compose, "services:\n  api:\n    image: two\n");
+    expect(workspaceSourceFingerprint(dir)).not.toBe(baseline);
   });
 
   // #646 review - the gate deciding whether to run the precise `check-attr`

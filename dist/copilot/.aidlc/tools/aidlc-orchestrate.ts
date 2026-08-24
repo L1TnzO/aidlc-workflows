@@ -91,6 +91,7 @@ import {
   type ErrorDirective,
   GATE_UNRESOLVED,
   type GateValue,
+  type LegacyPlanApprovalChoices,
   type LoadSteeringDirective,
   type ParkedDirective,
   type PrintDirective,
@@ -118,11 +119,13 @@ import {
   formatReceivedReply,
   freshReviewReceipts,
   getField,
+  installedHarnessName,
   intentRepos,
   inspectContinuationCursor,
   isPerUnitStage,
   isRegularFile,
   listIntents,
+  LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE,
   loadScopeMetadata,
   loadScopeMetadataAll,
   resolveReviewClass,
@@ -139,9 +142,11 @@ import {
   PHASES,
   parseWorkspaceCommand,
   READ_ONLY_FLAGS,
+  readKiroIdeLegacyPlanApprovalHost,
   readAllAuditShards,
   recordHookDrop,
   markEngineTouch,
+  kiroIdeLegacyPlanApprovalSessionId,
   relativeCodekbDir,
   relativeRecordDir,
   relativeSpaceRecordPrefix,
@@ -163,6 +168,7 @@ import {
   harnessDir,
   type WorkspaceCommand,
   writeActiveDirectiveMarker,
+  type PlanApprovalLegacyOfferCandidate,
   workspaceCommandUtilityArgv,
   classifyStateVersion,
 } from "./aidlc-lib.ts";
@@ -221,9 +227,16 @@ function loadStateFileIfPresent(projectDir: string): string | null {
 interface PreparedEmission {
   transported: Directive; serialized: string; resultSha256: string; projectDir?: string;
   marker?: {
-    kind: "load-steering" | "run-stage"; stage: string; unit?: string;
+    kind: "load-steering" | "run-stage" | "invoke-swarm"; stage: string; unit?: string;
+    units?: string[];
     part?: number; parts?: number; continue_token?: string; state_sha256: string;
   };
+}
+
+interface PreparedLegacyPlanApproval {
+  prepared: PreparedEmission;
+  offer?: PlanApprovalLegacyOfferCandidate;
+  session?: string;
 }
 
 let engineInvocation: { attemptId?: string; commandKind: "next" | "continue" | "report" | "park"; commandSha256: string } | null = null;
@@ -235,6 +248,7 @@ let engineInvocation: { attemptId?: string; commandKind: "next" | "continue" | "
 function prepareEmission(directive: Directive): PreparedEmission {
   const route =
     directive.kind === "run-stage" ? runStageRoutes.get(directive) : undefined;
+  const publication = publicationContexts.get(directive);
   const transported =
     directive.kind === "run-stage" && route
       ? transportRunStage(directive, route)
@@ -294,12 +308,86 @@ function prepareEmission(directive: Directive): PreparedEmission {
       state_sha256: markerStateHash,
     };
   }
+  if (transported.kind === "invoke-swarm" && publication) {
+    marker = {
+      kind: "invoke-swarm",
+      stage: "code-generation",
+      units: transported.units,
+      state_sha256: publication.stateHash,
+    };
+  }
   return {
     transported,
     serialized,
     resultSha256: sha256(serialized),
-    ...(route ? { projectDir: route.codekbCtx.projectDir } : {}),
+    ...(route
+      ? { projectDir: route.codekbCtx.projectDir }
+      : publication
+        ? { projectDir: publication.projectDir }
+        : {}),
     ...(marker ? { marker } : {}),
+  };
+}
+
+function attachLegacyKiroPlanApprovalChoices(
+  prepared: PreparedEmission,
+): PreparedLegacyPlanApproval {
+  const projectDir = prepared.projectDir;
+  const directive = prepared.transported;
+  if (
+    !projectDir ||
+    prepared.marker?.stage !== "code-generation" ||
+    installedHarnessName(projectDir) !== "kiro-ide"
+  ) {
+    return { prepared };
+  }
+  const session = kiroIdeLegacyPlanApprovalSessionId();
+  if (
+    !session ||
+    readKiroIdeLegacyPlanApprovalHost(projectDir, session)?.session !== session
+  ) {
+    return { prepared };
+  }
+  const eligible =
+    (
+      directive.kind === "run-stage" &&
+      directive.stage === "code-generation" &&
+      directive.swarm_settled !== true
+    ) ||
+    directive.kind === "invoke-swarm";
+  if (!eligible) return { prepared, session };
+
+  const nonce = randomBytes(6).toString("hex");
+  const choices: LegacyPlanApprovalChoices = {
+    approve: `Approve Plan [${nonce}]`,
+    request_changes: `Request Changes [${nonce}]`,
+  };
+  directive.legacy_plan_approval_choices = choices;
+  const validated = validateDirective(directive);
+  if (!validated.valid) {
+    throw new Error(
+      `legacy Plan Approval choices produced an invalid directive: ${validated.errors.join("; ")}`,
+    );
+  }
+  const serialized = JSON.stringify(validated.data);
+  if (Buffer.byteLength(serialized, "utf-8") > DIRECTIVE_MAX_BYTES) {
+    throw new Error(
+      "legacy Plan Approval choices exceed the directive transport limit",
+    );
+  }
+  const optionHashes = [
+    sha256(choices.approve.toLowerCase()),
+    sha256(choices.request_changes.toLowerCase()),
+  ] as [string, string];
+  return {
+    prepared: {
+      ...prepared,
+      transported: validated.data,
+      serialized,
+      resultSha256: sha256(serialized),
+    },
+    offer: { session, optionHashes },
+    session,
   };
 }
 
@@ -307,8 +395,22 @@ function writePrepared(prepared: PreparedEmission): void {
   writeFileSync(1, `${prepared.serialized}\n`, "utf-8");
 }
 
+function legacyPlanApprovalRecoveryDirective(): AskDirective {
+  return {
+    kind: "ask",
+    ask_type: "legacy-plan-approval-recovery",
+    response_route: "next",
+    recovery_choice: LEGACY_PLAN_APPROVAL_RECOVERY_CHOICE,
+    question:
+      "This legacy Kiro window must recover the current Code Generation Plan Approval capability before it can be reissued. Choose exactly: Recover Plan Approval",
+  };
+}
+
 function emit(directive: Directive): void {
-  const prepared = prepareEmission(directive);
+  const withLegacyOffer = attachLegacyKiroPlanApprovalChoices(
+    prepareEmission(directive),
+  );
+  const prepared = withLegacyOffer.prepared;
   if (prepared.marker) {
     const projectDir = prepared.projectDir;
     try {
@@ -317,8 +419,33 @@ function emit(directive: Directive): void {
           ...(engineInvocation?.attemptId ? { attemptId: engineInvocation.attemptId } : {}),
           ...(engineInvocation ? { commandKind: engineInvocation.commandKind } : {}),
           ...(engineInvocation ? { commandSha256: engineInvocation.commandSha256 } : {}),
+          ...(withLegacyOffer.offer
+            ? { legacyPlanApprovalOffer: withLegacyOffer.offer }
+            : {}),
+          ...(withLegacyOffer.session
+            ? { legacyPlanApprovalSession: withLegacyOffer.session }
+            : {}),
           resultSha256: prepared.resultSha256,
         });
+        if (publication === "legacy-plan-approval-owned") {
+          writePrepared(prepareEmission(errorDirective(
+            "Legacy Kiro Plan Approval is owned by another active IDE window. Continue the pending approval there; this call did not receive or rotate its protected choices.",
+          )));
+          return;
+        }
+        if (publication === "legacy-plan-approval-recovery-required") {
+          writePrepared(
+            prepareEmission(legacyPlanApprovalRecoveryDirective()),
+          );
+          return;
+        }
+        if (
+          publication === "legacy-plan-approval-reissued" ||
+          publication === "legacy-plan-approval-transport"
+        ) {
+          writePrepared(prepared);
+          return;
+        }
         if (publication === "stale-attempt") {
           recordHookDrop(projectDir, "active-directive", "tracked fresh next attempt was superseded before publication");
           writePrepared(prepareEmission(errorDirective(
@@ -1224,6 +1351,10 @@ type SteeringTokenPayload = {
 };
 
 const runStageRoutes = new WeakMap<RunStageDirective, RunStageRoute>();
+const publicationContexts = new WeakMap<
+  Directive,
+  { projectDir: string; stateHash: string }
+>();
 let requestedSteeringContinuation: SteeringTokenPayload | null = null;
 
 // "First run-stage of the workflow" — the deterministic signal D-E delivery
@@ -3597,20 +3728,30 @@ function tryEmitSwarm(
     "swarm",
   ];
   if (repos.length === 1) {
-    emit({
+    const directive: Directive = {
       kind: "invoke-swarm",
       units: pendingUnits,
       ...reviewerFields,
       protocol_modules: protocolModules,
       repo: repos[0],
+    };
+    publicationContexts.set(directive, {
+      projectDir,
+      stateHash: sha256(stateContent ?? ""),
     });
+    emit(directive);
   } else {
-    emit({
+    const directive: Directive = {
       kind: "invoke-swarm",
       units: pendingUnits,
       ...reviewerFields,
       protocol_modules: protocolModules,
+    };
+    publicationContexts.set(directive, {
+      projectDir,
+      stateHash: sha256(stateContent ?? ""),
     });
+    emit(directive);
   }
   return true;
 }
@@ -6111,7 +6252,10 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
   }
 
   requestedSteeringContinuation = payload;
-  const prepared = prepareEmission(directive);
+  const withLegacyOffer = attachLegacyKiroPlanApprovalChoices(
+    prepareEmission(directive),
+  );
+  const prepared = withLegacyOffer.prepared;
   if (!prepared.marker) {
     writePrepared(prepared);
     return;
@@ -6123,8 +6267,27 @@ function handleContinue(args: string[], projectDir: string | undefined): void {
       prepared.marker,
       prepared.resultSha256,
       engineInvocation?.attemptId,
+      withLegacyOffer.offer,
+      withLegacyOffer.session,
     );
     if (advanced === "advanced") {
+      writePrepared(prepared);
+      return;
+    }
+    if (advanced === "legacy-plan-approval-owned") {
+      writePrepared(prepareEmission(errorDirective(
+        "Legacy Kiro Plan Approval is owned by another active IDE window. Continue the pending approval there; this call did not receive or rotate its protected choices.",
+      )));
+      return;
+    }
+    if (advanced === "legacy-plan-approval-recovery-required") {
+      writePrepared(prepareEmission(legacyPlanApprovalRecoveryDirective()));
+      return;
+    }
+    if (
+      advanced === "legacy-plan-approval-reissued" ||
+      advanced === "legacy-plan-approval-transport"
+    ) {
       writePrepared(prepared);
       return;
     }

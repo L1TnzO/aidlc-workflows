@@ -824,6 +824,12 @@ describe("mechanismsOf is body-derived (milestone 3)", () => {
     // observable only at the process boundary where projectDir and the shipped
     // harness template are both present.
     "unit/t304-run-stage-memory-bootstrap.test.ts",
+    // t314 drives the real next/continue transport because stable authority
+    // publication is observable only across the emitted continuation cursor.
+    "unit/t314-code-generation-authority-publication.test.ts",
+    // t315 drives the shipped log, human-turn, and begin CLIs so protected
+    // challenge/response receipts and cross-process lock ordering are genuine.
+    "unit/t315-plan-approval-runtime-authority.test.ts",
     "integration/t102.test.ts",
     "integration/t104.test.ts",
     "integration/t105.test.ts",

@@ -31,6 +31,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   cpSync,
   existsSync,
@@ -51,6 +52,7 @@ import {
   sessionsDir,
   setActiveIntentCursor,
   setActiveSpaceCursor,
+  writeActiveDirectiveMarker,
 } from "../../core/tools/aidlc-lib.ts";
 import {
   DEFAULT_RECORD_DIR,
@@ -168,6 +170,12 @@ function seedUnapprovedCodeGeneration(dir: string, unit: string): void {
     `$1code-generation`,
   );
   writeFileSync(seededStateFile(dir), state, "utf-8");
+  writeActiveDirectiveMarker(dir, {
+    kind: "run-stage",
+    stage: "code-generation",
+    unit,
+    state_sha256: createHash("sha256").update(state).digest("hex"),
+  });
   mkdirSync(join(seededRecordDir(dir), "construction", unit, "code-generation"), {
     recursive: true,
   });
@@ -473,6 +481,35 @@ describe("t149 Codex hook adapter (live-captured payload fixtures)", () => {
       });
       expect(r.code).toBe(2);
       expect(r.stderr).toContain("plan-approval guard");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test("2cc: native Codex apply_patch and Bash mutation payloads reach plan approval", () => {
+    const dir = scratchProject(true);
+    try {
+      seedUnapprovedCodeGeneration(dir, "todo-core");
+      const patch = runAdapter(dir, "plan-approval-guard", {
+        hook_event_name: "PreToolUse",
+        cwd: dir,
+        tool_name: "apply_patch",
+        tool_input: {
+          command:
+            "*** Begin Patch\n*** Add File: src/blocked.ts\n+blocked\n*** End Patch\n",
+        },
+      });
+      expect(patch.code).toBe(2);
+      expect(patch.stderr).toContain("plan-approval guard");
+
+      const shell = runAdapter(dir, "plan-approval-guard", {
+        hook_event_name: "PreToolUse",
+        cwd: dir,
+        tool_name: "Bash",
+        tool_input: { command: "git diff --output=src/blocked.diff" },
+      });
+      expect(shell.code).toBe(2);
+      expect(shell.stderr).toContain("plan-approval guard");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
