@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.80] - 2026-08-24
+
+Type-check sensor incremental state now stays in the project record and uses a distinct cache per tsconfig, preventing package-local `aidlc/` trees in monorepos. **Upgrade:** refresh your `dist/<harness>/` shell; optionally remove legacy strays with `rm -rf packages/*/aidlc` after confirming they contain no project data, and drop any user-side workaround ignore rules.
+
+* Type-check keeps `--project` and the tsconfig-directory working directory while writing `.tsbuildinfo-<hash8>` files under the project record's `.aidlc-sensors/` directory, keyed by the project-relative tsconfig path.
+* Every harness now ignores the full engine-shaped sensor-cache path at any depth, covering legacy pre-2.6.80 package-local trees without ignoring unrelated `.aidlc-sensors` directories.
+
 ## [2.6.68] - 2026-08-24
 
 Summary-confirmation receipts now bind to the semantic questions and summary content the human reviewed while allowing the required post-generation assumption section. The contract is versioned, preserves legacy receipt verification, and reports an actionable recovery path for invalidated confirmations. **Upgrade:** refresh your `dist/<harness>/` shell so the scoped receipt, Markdown visibility, and recovery contracts stay aligned.
