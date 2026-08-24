@@ -27,8 +27,15 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
-import { dirname, join, relative } from "node:path";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join, relative, resolve } from "node:path";
 import {
   blockReason,
   judgeFreeze,
@@ -122,43 +129,49 @@ describe("t264 (a) judgeFreeze decision table", () => {
     expect(writeTargets("Write", { file_path: "/a/b.md" })).toEqual(["/a/b.md"]);
     expect(writeTargets("Edit", { file_path: "/a/b.md" })).toEqual(["/a/b.md"]);
     expect(writeTargets("Read", { file_path: "/a/b.md" })).toEqual([]);
-    expect(writeTargets("Bash", { command: "printf x >> /a/b.md" })).toEqual(["/a/b.md"]);
-    expect(writeTargets("Bash", { command: "printf x>>/a/b.md" })).toEqual(["/a/b.md"]);
-    expect(writeTargets("Bash", { command: 'printf x > "$PWD/a/b.md"' }, "/p")).toEqual([
-      "/p/a/b.md",
+    expect(writeTargets("Bash", { command: "printf x >> /a/b.md" })).toEqual([
+      resolve("/a/b.md"),
     ]);
-    expect(writeTargets("Bash", { command: "rm /a/b.md" })).toEqual(["/a/b.md"]);
+    expect(writeTargets("Bash", { command: "printf x>>/a/b.md" })).toEqual([
+      resolve("/a/b.md"),
+    ]);
+    expect(writeTargets("Bash", { command: 'printf x > "$PWD/a/b.md"' }, "/p")).toEqual([
+      resolve("/p/a/b.md"),
+    ]);
+    expect(writeTargets("Bash", { command: "rm /a/b.md" })).toEqual([
+      resolve("/a/b.md"),
+    ]);
     expect(writeTargets("Bash", { command: "command rm -f /a/b.md" })).toEqual([
-      "/a/b.md",
+      resolve("/a/b.md"),
     ]);
     expect(writeTargets("Bash", { command: "cp /a/b.md /tmp/copy" })).not.toContain(
-      "/a/b.md",
+      resolve("/a/b.md"),
     );
     expect(
       writeTargets("Bash", { command: "cp --target-directory=/tmp /a/b.md" }),
-    ).toEqual(["/tmp", "/tmp/b.md"]);
+    ).toEqual([resolve("/tmp"), resolve("/tmp/b.md")]);
     expect(writeTargets("Bash", { command: "cp -t /tmp /a/b.md" })).toEqual([
-      "/tmp",
-      "/tmp/b.md",
+      resolve("/tmp"),
+      resolve("/tmp/b.md"),
     ]);
     expect(
       writeTargets("Bash", {
         command: "cp /tmp/requirements.md /not-present/inception/requirements-analysis",
       }),
-    ).toEqual(["/not-present/inception/requirements-analysis"]);
+    ).toEqual([resolve("/not-present/inception/requirements-analysis")]);
     expect(writeTargets("Bash", { command: "mv /a/b.md /tmp/moved" })).toEqual(
-      expect.arrayContaining(["/a/b.md", "/tmp/moved"]),
+      expect.arrayContaining([resolve("/a/b.md"), resolve("/tmp/moved")]),
     );
     expect(writeTargets("Bash", { command: "install -dv /a/b /tmp/c" })).toEqual([
-      "/a/b",
-      "/tmp/c",
+      resolve("/a/b"),
+      resolve("/tmp/c"),
     ]);
     expect(writeTargets("Bash", { command: "truncate -s 1 -o /a/b.md" })).toEqual([
-      "/a/b.md",
+      resolve("/a/b.md"),
     ]);
     expect(
       writeTargets("Bash", { command: "command truncate -s 0 /a/b.md" }),
-    ).toEqual(["/a/b.md"]);
+    ).toEqual([resolve("/a/b.md")]);
     for (const command of [
       "timeout 5 truncate -s 0 /a/b.md",
       "nice truncate -s 0 /a/b.md",
@@ -172,17 +185,19 @@ describe("t264 (a) judgeFreeze decision table", () => {
       "unbuffer truncate -s 0 /a/b.md",
       "env -S 'truncate -s 0 /a/b.md'",
     ]) {
-      expect(writeTargets("Bash", { command }), command).toContain("/a/b.md");
+      expect(writeTargets("Bash", { command }), command).toContain(
+        resolve("/a/b.md"),
+      );
     }
     expect(writeTargets("Bash", { command: "truncate -r /a/b.md /tmp/out" })).toEqual([
-      "/tmp/out",
+      resolve("/tmp/out"),
     ]);
     expect(
       writeTargets("Bash", { command: "sed -i 's/x/y/' /a/b.md /tmp/c.md" }),
-    ).toEqual(["/a/b.md", "/tmp/c.md"]);
+    ).toEqual([resolve("/a/b.md"), resolve("/tmp/c.md")]);
     expect(
       writeTargets("Bash", { command: "perl -pi -e 's/x/y/' /a/b.md /tmp/c.md" }),
-    ).toEqual(["/a/b.md", "/tmp/c.md"]);
+    ).toEqual([resolve("/a/b.md"), resolve("/tmp/c.md")]);
     expect(writeTargets("Bash", { command: "sed -n '1p' /a/b.md" })).toEqual([]);
     expect(
       writeTargets("Bash", { command: "sed --version; cat /a/b.md" }),
@@ -214,6 +229,21 @@ function openGate(p: string): void {
 }
 
 function recordReview(p: string, verdict: "READY" | "NOT-READY"): void {
+  const artifact = raArtifact(p);
+  mkdirSync(dirname(artifact), { recursive: true });
+  if (!existsSync(artifact)) {
+    writeFileSync(artifact, "# Requirements\n", "utf-8");
+  } else {
+    const current = readFileSync(artifact, "utf-8");
+    const reviewStart = current.search(/^## Review[ \t]*$/m);
+    if (reviewStart !== -1) {
+      writeFileSync(
+        artifact,
+        `${current.slice(0, reviewStart).replace(/\s+$/, "")}\n`,
+        "utf-8",
+      );
+    }
+  }
   const args = [
     LOG_TOOL,
     "review",
@@ -226,11 +256,22 @@ function recordReview(p: string, verdict: "READY" | "NOT-READY"): void {
     "--project-dir",
     p,
   ];
-  for (const suffix of [[], ["--verdict", verdict]]) {
-    const r = spawnSync(BUN, [...args, ...suffix], { encoding: "utf-8" });
-    if ((r.status ?? -1) !== 0) {
-      throw new Error(`review log failed: ${r.stdout}${r.stderr}`);
-    }
+  const requested = spawnSync(BUN, args, { encoding: "utf-8" });
+  if ((requested.status ?? -1) !== 0) {
+    throw new Error(`review request failed: ${requested.stdout}${requested.stderr}`);
+  }
+  appendFileSync(
+    artifact,
+    `\n## Review\n\n**Verdict:** ${verdict}\n**Reviewer:** aidlc-product-lead-agent\n**Iteration:** 1\n\n### Findings\n\nFixture review.\n`,
+    "utf-8",
+  );
+  const completed = spawnSync(BUN, [...args, "--verdict", verdict], {
+    encoding: "utf-8",
+  });
+  if ((completed.status ?? -1) !== 0) {
+    throw new Error(
+      `review completion failed: ${completed.stdout}${completed.stderr}`,
+    );
   }
 }
 

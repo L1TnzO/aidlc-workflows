@@ -51,7 +51,8 @@ If the stage definition lists validation tools, **run them via shell** before wr
 
 ## How to Lodge Review Comments
 
-Append a `## Review` section to the PRIMARY artifact file. Use this exact format:
+Append a `## Review` section only to the artifact named by the stage's
+`review_artifact` field. Use this exact format:
 
 ```markdown
 ## Review

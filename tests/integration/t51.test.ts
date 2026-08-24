@@ -53,7 +53,14 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import {
+  appendFileSync,
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import { cleanupTestProject, createTestProject } from "../harness/fixtures.ts";
 
@@ -128,8 +135,44 @@ function walkStage(proj: string, slug: string): void {
     "code-generation": "aidlc-architecture-reviewer-agent",
   };
   if (reviewerFor[slug]) {
-    spawnSync(BUN, [LOG, "review", "--stage", slug, "--reviewer", reviewerFor[slug], "--iteration", "1", "--project-dir", proj], { encoding: "utf-8" });
-    spawnSync(BUN, [LOG, "review", "--stage", slug, "--reviewer", reviewerFor[slug], "--iteration", "1", "--verdict", "READY", "--project-dir", proj], { encoding: "utf-8" });
+    const artifact =
+      slug === "requirements-analysis"
+        ? join(
+            recordDirOf(proj),
+            "inception",
+            slug,
+            "requirements.md",
+          )
+        : join(
+            recordDirOf(proj),
+            "construction",
+            "unit-alpha",
+            slug,
+            "code-generation-plan.md",
+          );
+    mkdirSync(join(artifact, ".."), { recursive: true });
+    writeFileSync(artifact, `# ${slug}\n`, "utf-8");
+    const request = [
+      LOG,
+      "review",
+      "--stage",
+      slug,
+      "--reviewer",
+      reviewerFor[slug],
+      "--iteration",
+      "1",
+      "--project-dir",
+      proj,
+    ];
+    spawnSync(BUN, request, { encoding: "utf-8" });
+    appendFileSync(
+      artifact,
+      `\n## Review\n\n**Verdict:** READY\n**Reviewer:** ${reviewerFor[slug]}\n**Iteration:** 1\n\n### Findings\n\nFixture review.\n`,
+      "utf-8",
+    );
+    spawnSync(BUN, [...request.slice(0, -2), "--verdict", "READY", ...request.slice(-2)], {
+      encoding: "utf-8",
+    });
   }
   const gs = spawnSync(BUN, [STATE, "gate-start", slug, "--project-dir", proj], {
     encoding: "utf-8",

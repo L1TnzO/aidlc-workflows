@@ -34,7 +34,9 @@ import {
   readAllAuditShards,
   readStateFile,
   recordDir,
-  reviewArtifactFingerprint,
+  reviewCompletionMatchesRequest,
+  reviewArtifactSnapshot,
+  reviewRequestBindingFromBlock,
   resolveBoltDag,
   resolveProjectDir,
   resolveReviewClass,
@@ -43,10 +45,15 @@ import {
   stateFilePath,
   toPosix,
   UNBINDABLE_FINGERPRINT,
+  validateReviewAppendix,
   withAuditLock,
   workspaceSourceFingerprint,
 } from "./aidlc-lib.js";
-import type { ReviewClass } from "./aidlc-lib.js";
+import type {
+  ReviewClass,
+  ReviewRequestBinding,
+  ReviewVerdict,
+} from "./aidlc-lib.js";
 
 // Resolve the project dir AND assert that an active workflow exists before any
 // audit emit. WHY: aidlc-log is orchestrator-called per-question and threads no
@@ -670,7 +677,13 @@ type ReviewAttemptSummary = {
   boltBatch: string | null;
   boltSlug: string | null;
   pendingIterations: Set<number>;
-  pendingFingerprints: Map<number, string | null>;
+  pendingRequests: Map<
+    number,
+    {
+      binding: ReviewRequestBinding | null;
+      retried: boolean;
+    }
+  >;
   recoveryIteration: number | null;
   recoverySpent: boolean;
 };
@@ -683,7 +696,7 @@ type ReviewAttemptSummary = {
 function reviewAttemptSummary(
   audit: string,
   stateContent: string,
-  stage: { slug: string; for_each?: string },
+  stage: { slug: string; for_each?: string; workspace_requires?: boolean },
   reviewer: string,
   unit: string | undefined,
   workflow: string | undefined,
@@ -782,7 +795,13 @@ function reviewAttemptSummary(
   let recoveryIteration: number | null = null;
   let recoverySpent = false;
   const pendingIterations = new Set<number>();
-  const pendingFingerprints = new Map<number, string | null>();
+  const pendingRequests = new Map<
+    number,
+    {
+      binding: ReviewRequestBinding | null;
+      retried: boolean;
+    }
+  >();
   for (let i = floor + 1; i < events.length; i++) {
     const entry = events[i];
     if (
@@ -807,6 +826,8 @@ function reviewAttemptSummary(
     if (!rawIteration || !/^[1-9][0-9]*$/.test(rawIteration)) continue;
     const iteration = Number(rawIteration);
     if (entry.event === "REVIEW_REQUESTED") {
+      const binding = reviewRequestBindingFromBlock(entry.block);
+      if (binding === null) continue;
       if (auditBlockField(entry.block, "Retry") !== "pending-request") {
         requestCount++;
       }
@@ -815,13 +836,27 @@ function reviewAttemptSummary(
         recoverySpent = true;
       }
       pendingIterations.add(iteration);
-      pendingFingerprints.set(
-        iteration,
-        auditBlockField(entry.block, "Artifact Fingerprint"),
-      );
+      const previous = pendingRequests.get(iteration);
+      const modernBinding =
+        binding.appendixArtifact !== null &&
+        binding.appendixOffset !== null &&
+        (!stage.workspace_requires || binding.sourceFingerprint !== null);
+      pendingRequests.set(iteration, {
+        binding,
+        retried:
+          previous?.retried === true ||
+          (auditBlockField(entry.block, "Retry") === "pending-request" &&
+            modernBinding),
+      });
     } else {
-      pendingIterations.delete(iteration);
-      pendingFingerprints.delete(iteration);
+      const pending = pendingRequests.get(iteration);
+      if (
+        pending?.binding &&
+        reviewCompletionMatchesRequest(pending.binding, entry.block)
+      ) {
+        pendingIterations.delete(iteration);
+        pendingRequests.delete(iteration);
+      }
     }
   }
   return {
@@ -830,7 +865,7 @@ function reviewAttemptSummary(
     boltBatch,
     boltSlug,
     pendingIterations,
-    pendingFingerprints,
+    pendingRequests,
     recoveryIteration,
     recoverySpent,
   };
@@ -933,6 +968,11 @@ function handleReview(args: string[]): void {
     if (!node?.reviewer) {
       refuseReview(`Cannot record review: stage "${flags.stage}" has no declared reviewer.`);
     }
+    if (!node.review_artifact) {
+      refuseReview(
+        `Cannot record review: stage "${flags.stage}" has no declared review_artifact.`,
+      );
+    }
     if (flags.reviewer !== node.reviewer) {
       refuseReview(
         `Cannot record review for "${flags.stage}": reviewer "${flags.reviewer}" ` +
@@ -1016,6 +1056,7 @@ function handleReview(args: string[]): void {
     const iteration = Number(flags.iteration);
     fields.Iteration = flags.iteration;
     let retried = false;
+    let upgraded = false;
     let recovery: "stale-receipt" | undefined;
     try {
       withAuditLock(pd, () => {
@@ -1046,7 +1087,8 @@ function handleReview(args: string[]): void {
         const recoverySpent =
           attempt.recoverySpent || sourceRecoverySpent;
         if (retryPending) {
-          if (!attempt.pendingIterations.has(iteration)) {
+          const pendingRequest = attempt.pendingRequests.get(iteration);
+          if (!pendingRequest) {
             if (scopeStale) {
               if (recoverySpent) {
                 refuseReview(
@@ -1085,15 +1127,74 @@ function handleReview(args: string[]): void {
                 `REVIEW_REQUESTED iteration ${iteration} exists in the current audit attempt.`,
             );
           }
-          fields.Retry = "pending-request";
-          const fingerprint = reviewArtifactFingerprint(pd, node, flags.unit);
-          if (fingerprint === null) {
+          const requestBinding = pendingRequest.binding;
+          if (requestBinding === null) {
             refuseReview(
-              `Cannot record review for "${flags.stage}": the declared artifact set could not be ` +
-                "fingerprinted. Resolve the active intent and readable artifact paths, then retry.",
+              `Refusing review retry for "${flags.stage}": the original ` +
+                `REVIEW_REQUESTED iteration ${iteration} has no valid request ` +
+                "binding, so its authority cannot be recovered by rebaselining.",
             );
           }
-          fields["Artifact Fingerprint"] = fingerprint;
+          if (pendingRequest.retried) {
+            refuseReview(
+              `Refusing review retry for "${flags.stage}": REVIEW_REQUESTED ` +
+                `iteration ${iteration} already used its one pending-request retry. ` +
+                "Do not dispatch it again; record the bounded incomplete-review " +
+                "NOT-READY fallback or start the next permitted review iteration.",
+            );
+          }
+          const snapshot = reviewArtifactSnapshot(pd, node, flags.unit);
+          if (snapshot === null) {
+            refuseReview(
+              `Cannot retry review for "${flags.stage}": the declared artifact set ` +
+                "could not be captured as one stable snapshot. Restore regular " +
+                "artifact files and retry.",
+            );
+          }
+          if (snapshot.fingerprint !== requestBinding.artifactFingerprint) {
+            refuseReview(
+              `Refusing review retry for "${flags.stage}": declared artifacts no ` +
+                `longer match the bytes from REVIEW_REQUESTED iteration ${iteration}. ` +
+                "A retry re-dispatches that exact request and cannot rebaseline changed " +
+                "content. Remove any partial reviewer appendix and restore the requested " +
+                "artifact bytes before retrying.",
+            );
+          }
+          const legacyUpgrade =
+            requestBinding.appendixArtifact === null ||
+            requestBinding.appendixOffset === null ||
+            (node.workspace_requires &&
+              requestBinding.sourceFingerprint === null);
+          let sourceFingerprint = requestBinding.sourceFingerprint;
+          if (node.workspace_requires) {
+            const currentSource =
+              workspaceSourceFingerprint(pd) ?? UNBINDABLE_FINGERPRINT;
+            if (
+              requestBinding.sourceFingerprint !== null &&
+              currentSource !== requestBinding.sourceFingerprint
+            ) {
+              refuseReview(
+                `Refusing review retry for "${flags.stage}": workspace source no ` +
+                  `longer matches REVIEW_REQUESTED iteration ${iteration}. A retry ` +
+                  "cannot rebaseline source changed while review was pending.",
+              );
+            }
+            sourceFingerprint = currentSource;
+          }
+          fields.Retry = "pending-request";
+          fields["Artifact Fingerprint"] = requestBinding.artifactFingerprint;
+          fields["Review Appendix Artifact"] =
+            requestBinding.appendixArtifact ?? snapshot.appendixArtifact;
+          fields["Review Appendix Offset"] = String(
+            requestBinding.appendixOffset ?? snapshot.appendixOffset,
+          );
+          if (sourceFingerprint !== null) {
+            fields["Source Fingerprint"] = sourceFingerprint;
+          }
+          if (legacyUpgrade) {
+            fields.Upgrade = "legacy-request";
+            upgraded = true;
+          }
           emitAudit(pd, "REVIEW_REQUESTED", fields, intent, space);
           retried = true;
           return;
@@ -1149,14 +1250,20 @@ function handleReview(args: string[]): void {
           fields.Recovery = "stale-receipt";
           recovery = "stale-receipt";
         }
-        const fingerprint = reviewArtifactFingerprint(pd, node, flags.unit);
-        if (fingerprint === null) {
+        const snapshot = reviewArtifactSnapshot(pd, node, flags.unit);
+        if (snapshot === null) {
           refuseReview(
             `Cannot record review for "${flags.stage}": the declared artifact set could not be ` +
               "fingerprinted. Resolve the active intent and readable artifact paths, then retry.",
           );
         }
-        fields["Artifact Fingerprint"] = fingerprint;
+        fields["Artifact Fingerprint"] = snapshot.fingerprint;
+        fields["Review Appendix Artifact"] = snapshot.appendixArtifact;
+        fields["Review Appendix Offset"] = String(snapshot.appendixOffset);
+        if (node.workspace_requires) {
+          fields["Source Fingerprint"] =
+            workspaceSourceFingerprint(pd) ?? UNBINDABLE_FINGERPRINT;
+        }
         emitAudit(pd, "REVIEW_REQUESTED", fields, intent, space);
       }, intent, space);
     } catch (e) {
@@ -1167,6 +1274,7 @@ function handleReview(args: string[]): void {
       emitted: "REVIEW_REQUESTED",
       stage: flags.stage,
       ...(retried ? { retry: "pending-request" } : {}),
+      ...(upgraded ? { upgrade: "legacy-request" } : {}),
       ...(recovery ? { recovery } : {}),
     }));
     return;
@@ -1191,45 +1299,88 @@ function handleReview(args: string[]): void {
   try {
     withAuditLock(pd, () => {
       const { node, attempt } = loadContext();
-      if (!attempt.pendingIterations.has(iteration)) {
+      const pendingRequest = attempt.pendingRequests.get(iteration);
+      if (!pendingRequest) {
         refuseReview(
           `Refusing REVIEW_COMPLETED for "${flags.stage}": no unmatched ` +
             `REVIEW_REQUESTED iteration ${iteration} exists in the current audit attempt.`,
         );
       }
-      const requestedFingerprint = attempt.pendingFingerprints.get(iteration);
-      if (
-        requestedFingerprint === undefined ||
-        requestedFingerprint === null ||
-        !/^sha256:[0-9a-f]{64}$/.test(requestedFingerprint)
-      ) {
+      const requestBinding = pendingRequest.binding;
+      if (requestBinding === null) {
         refuseReview(
           `Refusing REVIEW_COMPLETED for "${flags.stage}": the matching REVIEW_REQUESTED ` +
-            `iteration ${iteration} has no valid artifact fingerprint. Re-dispatch that exact ` +
-            "iteration with --retry-pending before recording the verdict.",
+            `iteration ${iteration} has no valid request binding. Its authority ` +
+            "cannot be recovered by retrying or rebaselining; start a fresh review attempt.",
         );
       }
-      const fingerprint = reviewArtifactFingerprint(pd, node, flags.unit);
-      if (fingerprint === null) {
+      if (
+        requestBinding.appendixArtifact === null ||
+        requestBinding.appendixOffset === null
+      ) {
         refuseReview(
-          `Cannot record review for "${flags.stage}": the declared artifact set could not be fingerprinted. Resolve the active intent and readable artifact paths, then record the verdict again.`,
+          `Refusing REVIEW_COMPLETED for "${flags.stage}": the matching request ` +
+            "does not carry a modern review appendix binding.",
         );
       }
-      if (fingerprint !== requestedFingerprint) {
+      const snapshot = reviewArtifactSnapshot(pd, node, flags.unit, {
+        appendixBinding: {
+          artifact: requestBinding.appendixArtifact,
+          offset: requestBinding.appendixOffset,
+        },
+      });
+      if (snapshot === null) {
         refuseReview(
-          `Refusing REVIEW_COMPLETED for "${flags.stage}": declared artifacts changed after ` +
-            `REVIEW_REQUESTED iteration ${iteration}. Re-dispatch that exact iteration with ` +
-            "--retry-pending so the reviewer inspects the current bytes.",
+          `Cannot record review for "${flags.stage}": the declared artifact set ` +
+            "changed during the snapshot or its append target is no longer valid.",
         );
       }
-      fields["Artifact Fingerprint"] = fingerprint;
+      if (snapshot.requestFingerprint !== requestBinding.artifactFingerprint) {
+        refuseReview(
+          `Refusing REVIEW_COMPLETED for "${flags.stage}": declared artifacts changed ` +
+            `outside the reviewer-authored appendix after REVIEW_REQUESTED iteration ` +
+            `${iteration}. Restore the requested bytes and re-dispatch that exact ` +
+            "iteration; --retry-pending cannot rebaseline changed content.",
+        );
+      }
+      const incompleteFallback =
+        snapshot.appendix.length === 0 &&
+        pendingRequest.retried &&
+        verdict === "NOT-READY";
+      if (!incompleteFallback) {
+        const appendix = validateReviewAppendix(snapshot.appendix, {
+          verdict: verdict as ReviewVerdict,
+          reviewer: flags.reviewer,
+          iteration,
+        });
+        if (!appendix.valid) {
+          refuseReview(
+            `Refusing REVIEW_COMPLETED for "${flags.stage}": ${appendix.reason}.`,
+          );
+        }
+      }
+      fields["Request Fingerprint"] = requestBinding.artifactFingerprint;
+      fields["Artifact Fingerprint"] = snapshot.fingerprint;
+      fields["Review Appendix Artifact"] = requestBinding.appendixArtifact;
+      fields["Review Appendix Offset"] = String(
+        requestBinding.appendixOffset,
+      );
       // Bind the terminal receipt to the workspace source state the reviewer
       // inspected. Only workspace-writing stages carry this binding. A newly
       // unbindable receipt records that explicitly so completion fails closed;
       // only genuinely legacy fieldless receipts keep migration behavior.
       if (node.workspace_requires) {
-        fields["Source Fingerprint"] =
+        const sourceFingerprint =
           workspaceSourceFingerprint(pd) ?? UNBINDABLE_FINGERPRINT;
+        if (sourceFingerprint !== requestBinding.sourceFingerprint) {
+          refuseReview(
+            `Refusing REVIEW_COMPLETED for "${flags.stage}": workspace source ` +
+              `changed after REVIEW_REQUESTED iteration ${iteration}. Restore ` +
+              "the requested source state and re-dispatch the reviewer.",
+          );
+        }
+        fields["Request Source Fingerprint"] = sourceFingerprint;
+        fields["Source Fingerprint"] = sourceFingerprint;
       }
       emitAudit(pd, "REVIEW_COMPLETED", fields, intent, space);
     }, intent, space);

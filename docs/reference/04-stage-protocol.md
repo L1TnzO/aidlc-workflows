@@ -986,9 +986,11 @@ engine from three inputs (low-wins): the stage's declared class, the active
 scope's `review_cap`, and any per-run `--review` override. A `none` resolution
 omits the reviewer block entirely and the stage runs reviewless.
 
-1. **Invoke.** Before every dispatch - the first, a NOT-READY re-invoke, or a
-   re-review after a Part 0 gate-rejection revision - the conductor first
-   deletes any existing `## Review` section on the primary artifact: review
+1. **Invoke.** The directive's `review_artifact` field names the required
+   Markdown output that owns the appendix; output ordering and plugin additions
+   cannot change it. Before every dispatch - the first, a NOT-READY re-invoke,
+   or a re-review after a Part 0 gate-rejection revision - the conductor first
+   deletes any existing `## Review` section and its separator bytes there: review
    history lives in the audit ledger, and a leftover section (in the worst
    case a pre-revision `READY`) is exactly what a re-review that is itself
    cut off before writing would be misread against. With the delete rule,
@@ -1006,8 +1008,11 @@ omits the reviewer block entirely and the stage runs reviewless.
    ranked by severity for the human at the gate, with no repair loop behind
    them. Either way the reviewer reads the definition, Q&A, and artifacts, runs
    any listed validation tools, and appends exactly ONE `## Review` section to
-   the primary artifact with exactly one verdict line: **READY** or
-   **NOT-READY**. The reviewers run under a hard turn budget (`maxTurns: 60`),
+   `review_artifact`. The complete suffix contains one matching Verdict,
+   Reviewer, and Iteration line and no second H2 section. The request binds
+   artifact bytes and workspace source before dispatch; retry cannot rebaseline
+   either, and completion uses one stable file-identity snapshot. The reviewers
+   run under a hard turn budget (`maxTurns: 60`),
    authored once in the persona frontmatter and enforced natively where the
    harness has a lever: Claude Code reads the key verbatim (the sub-agent is
    stopped mid-task, no final-message turn) and the opencode packager projects
@@ -1024,8 +1029,9 @@ omits the reviewer block entirely and the stage runs reviewless.
    2) → the lead agent re-runs to address the findings and the reviewer
    re-checks. NOT-READY with iterations exhausted → proceed to the gate with the
    unresolved findings noted.
-   A verdict only counts when it parses: exactly ONE current `## Review`
-   section with exactly one canonical verdict token. A missing section (a
+   A verdict only counts when the entire appended suffix parses as exactly ONE
+   owned `## Review` section with matching canonical identity fields. A missing
+   section (a
    capped or crashed reviewer is stopped without writing one - step 1 deletes
    any prior section before every dispatch, so a leftover can never stand in
    for it), a section without a canonical verdict line, or duplicated

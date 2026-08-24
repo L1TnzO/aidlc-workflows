@@ -1,6 +1,16 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.62] - 2026-08-24
+
+Reviewer receipts now bind one explicit review artifact, every dispatched artifact byte, and workspace source before dispatch, then validate the complete reviewer-owned appendix from one stable completion snapshot. This closes retry rebaselining, arbitrary-suffix certification, pending-source mutation, file-replacement races, ambiguous append ownership, and malformed-completion deadlocks. **Upgrade:** refresh your complete `dist/<harness>/` shell so stage metadata, the review logger, receipt readers, protocol, and audit contract are installed together.
+
+* Reviewer-bearing stages declare `review_artifact`, a required Markdown output that remains applicable across the stage's Unit kinds; plugin-added outputs and no-DAG directory order cannot silently redefine ownership.
+* `REVIEW_REQUESTED` captures stable file identities, exact artifact bytes, the append boundary, and request-time workspace source. `--retry-pending` reuses those bindings and refuses artifact or source changes.
+* `REVIEW_COMPLETED` uses one coherent snapshot for both request-prefix and full-result hashes and Bun's Markdown parser to accept only blank separators plus one terminal canonical `## Review` section whose sole top-level rendered Verdict, Reviewer, and Iteration fields match the request; later Markdown or raw-HTML H1/H2 sections and conflicting rendered ownership fields are rejected, while code, comments, and container examples carry no authority.
+* A modern pending request gets exactly one retry. Valid field-light legacy chains get one audited `Upgrade: legacy-request` and mandatory fresh dispatch, including chains with a historical unbound retry marker; malformed requests are ignored so they cannot deadlock the ordinal.
+* Malformed completion rows no longer consume pending requests. Gate freshness and autonomous swarm finalization validate the modern paired binding while retaining compatibility with older equal-fingerprint receipts.
+
 ## [2.6.61] - 2026-08-23
 
 Plugins can now extend `/aidlc --doctor` with selection-aware, fail-loud install checks while preserving advisory findings that do not block CI. **Upgrade:** re-copy `dist/<harness>/` for the updated `aidlc-utility.ts`, then refresh and re-compose each plugin's `dist/plugins/<name>/<harness>/` projection to install its doctor script.
