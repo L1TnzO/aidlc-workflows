@@ -74,9 +74,9 @@
 
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { existsSync, readFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, realpathSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { basename, join, resolve, sep } from "node:path";
+import { basename, join, posix, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { dirname } from "node:path";
 import { appendAuditEntry } from "./aidlc-audit.ts";
@@ -101,13 +101,16 @@ import {
   resolveConstructionRepo,
   resolveProjectDir,
   resolveStage,
+  shapeSourceSnapshotIndex,
   terminalReviewVerdict,
   UNBINDABLE_FINGERPRINT,
   validateUnitName,
   worktreeAuditFilePath,
   worktreePath,
   worktreeRuntimeGraphPath,
+  workspaceSourceEmbeddedGitPaths,
   workspaceSourceFingerprint as worktreeSourceFingerprint,
+  workspaceSourceSnapshotPaths,
   worktreeStateFilePath,
 } from "./aidlc-lib.ts";
 import { compiledExecutable } from "./aidlc-runtime-paths.ts";
@@ -483,6 +486,365 @@ function reviewerReceiptError(
 // merge carries application source only. Recompute the fingerprint after the
 // object is written to close a concurrent-edit window; the validated value is
 // the one carried to the convergence row.
+function recoverableSubmoduleUrls(
+  repoDir: string,
+): Map<string, string> | null {
+  const modulesPath = join(repoDir, ".gitmodules");
+  if (!existsSync(modulesPath)) return new Map();
+  const paths = spawnSync(
+    "git",
+    [
+      "-C",
+      repoDir,
+      "config",
+      "-f",
+      ".gitmodules",
+      "--get-regexp",
+      "^submodule\\..*\\.path$",
+    ],
+    { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+  );
+  if (paths.status === 1) return new Map();
+  if (paths.status !== 0) return null;
+  const recoverable = new Map<string, string>();
+  for (const line of paths.stdout.split(/\r?\n/)) {
+    if (!line) continue;
+    const separator = line.indexOf(" ");
+    if (separator <= 0) return null;
+    const key = line.slice(0, separator);
+    const path = line.slice(separator + 1).trim().replace(/\\/g, "/");
+    if (!key.endsWith(".path") || !path) return null;
+    const urlKey = `${key.slice(0, -".path".length)}.url`;
+    const url = spawnSync(
+      "git",
+      ["-C", repoDir, "config", "-f", ".gitmodules", "--get", urlKey],
+      { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+    );
+    if (url.status !== 0 || !url.stdout.trim()) continue;
+    recoverable.set(path, url.stdout.trim());
+  }
+  return recoverable;
+}
+
+function configuredParentRemoteUrl(repoDir: string): string | null {
+  const branch = spawnSync(
+    "git",
+    ["-C", repoDir, "symbolic-ref", "--quiet", "--short", "HEAD"],
+    { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+  );
+  if (branch.status === 0 && branch.stdout.trim()) {
+    const remoteName = spawnSync(
+      "git",
+      [
+        "-C",
+        repoDir,
+        "config",
+        "--get",
+        `branch.${branch.stdout.trim()}.remote`,
+      ],
+      { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+    );
+    if (
+      remoteName.status === 0 &&
+      remoteName.stdout.trim() &&
+      remoteName.stdout.trim() !== "."
+    ) {
+      const remoteUrl = spawnSync(
+        "git",
+        [
+          "-C",
+          repoDir,
+          "config",
+          "--get",
+          `remote.${remoteName.stdout.trim()}.url`,
+        ],
+        { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+      );
+      if (remoteUrl.status === 0 && remoteUrl.stdout.trim()) {
+        return remoteUrl.stdout.trim();
+      }
+    }
+  }
+  const origin = spawnSync(
+    "git",
+    ["-C", repoDir, "config", "--get", "remote.origin.url"],
+    { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+  );
+  return origin.status === 0 && origin.stdout.trim()
+    ? origin.stdout.trim()
+    : null;
+}
+
+function resolveRelativeSubmoduleUrl(
+  repoDir: string,
+  metadataUrl: string,
+): string | null {
+  if (!metadataUrl.startsWith("./") && !metadataUrl.startsWith("../")) {
+    return metadataUrl;
+  }
+  const parentUrl = configuredParentRemoteUrl(repoDir);
+  if (!parentUrl) return null;
+  if (/^[A-Za-z][A-Za-z0-9+.-]*:\/\//.test(parentUrl)) {
+    try {
+      const base = parentUrl.endsWith("/") ? parentUrl : `${parentUrl}/`;
+      return new URL(metadataUrl, base).toString();
+    } catch {
+      return null;
+    }
+  }
+  if (
+    !/^[A-Za-z]:[\\/]/.test(parentUrl) &&
+    /^[^/\\:]+:.+/.test(parentUrl)
+  ) {
+    const colon = parentUrl.indexOf(":");
+    const host = parentUrl.slice(0, colon);
+    const remotePath = parentUrl.slice(colon + 1);
+    return `${host}:${posix.normalize(`${remotePath}/${metadataUrl}`)}`;
+  }
+  return resolve(parentUrl, metadataUrl);
+}
+
+function newGitlinkRecoveryError(
+  repoDir: string,
+  subDir: string,
+  path: string,
+  metadataUrl: string,
+  commit: string,
+): string | null {
+  const endpoint = resolveRelativeSubmoduleUrl(repoDir, metadataUrl);
+  if (!endpoint) {
+    return `cannot resolve .gitmodules recovery URL for new submodule ${path}`;
+  }
+  if (metadataUrl.startsWith("./") || metadataUrl.startsWith("../")) {
+    const origin = spawnSync(
+      "git",
+      ["-C", subDir, "remote", "get-url", "origin"],
+      { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+    );
+    const normalize = (value: string): string =>
+      value.trim().replace(/\\/g, "/").replace(/\/+$/, "");
+    if (
+      origin.status !== 0 ||
+      normalize(origin.stdout) !== normalize(endpoint)
+    ) {
+      return `new submodule ${path} origin does not match its resolved .gitmodules recovery URL`;
+    }
+  }
+  const advertised = spawnSync(
+    "git",
+    ["ls-remote", endpoint, "HEAD", "refs/heads/*", "refs/tags/*"],
+    {
+      encoding: "utf-8",
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+      maxBuffer: 512 * 1024 * 1024,
+      timeout: 15_000,
+    },
+  );
+  if (advertised.status !== 0) {
+    return `new submodule ${path} recovery endpoint is unavailable`;
+  }
+  const advertisedRefs = new Set<string>();
+  for (const line of advertised.stdout.split(/\r?\n/)) {
+    if (!line) continue;
+    const [oid, ref] = line.split(/\s+/, 2);
+    if (!/^[0-9a-f]{40,64}$/.test(oid) || !ref) continue;
+    const baseRef = ref.endsWith("^{}") ? ref.slice(0, -3) : ref;
+    if (
+      baseRef !== "HEAD" &&
+      !baseRef.startsWith("refs/heads/") &&
+      !baseRef.startsWith("refs/tags/")
+    ) {
+      continue;
+    }
+    if (!ref.endsWith("^{}")) advertisedRefs.add(ref);
+  }
+  if (advertisedRefs.size === 0) {
+    return `new submodule ${path} recovery endpoint advertises no cloneable refs`;
+  }
+  if (advertisedRefs.size > 10_000) {
+    return `new submodule ${path} recovery endpoint advertises too many refs`;
+  }
+  const recoveryRefspecs = [...advertisedRefs].sort().map((ref) => {
+    if (ref === "HEAD") return "+HEAD:refs/aidlc/recovery/HEAD";
+    if (ref.startsWith("refs/heads/")) {
+      return `+${ref}:refs/aidlc/recovery/heads/${ref.slice("refs/heads/".length)}`;
+    }
+    return `+${ref}:refs/aidlc/recovery/tags/${ref.slice("refs/tags/".length)}`;
+  });
+  const recoveryRefspecInput = `${recoveryRefspecs.join("\n")}\n`;
+  if (Buffer.byteLength(recoveryRefspecInput, "utf-8") > 1024 * 1024) {
+    return `new submodule ${path} recovery endpoint refspecs exceed the size budget`;
+  }
+
+  const recoveryRepo = mkdtempSync(
+    join(tmpdir(), `aidlc-submodule-recovery-${process.pid}-`),
+  );
+  try {
+    const initialized = spawnSync(
+      "git",
+      ["-C", recoveryRepo, "init", "--bare", "-q"],
+      { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+    );
+    if (initialized.status !== 0) {
+      return `cannot initialize recovery proof for new submodule ${path}`;
+    }
+    const fetched = spawnSync(
+      "git",
+      [
+        "-C",
+        recoveryRepo,
+        "fetch",
+        "--quiet",
+        "--no-tags",
+        "--no-write-fetch-head",
+        "--filter=blob:none",
+        "--stdin",
+        endpoint,
+      ],
+      {
+        encoding: "utf-8",
+        env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+        input: recoveryRefspecInput,
+        maxBuffer: 512 * 1024 * 1024,
+        timeout: 15_000,
+      },
+    );
+    if (fetched.status !== 0) {
+      return `cannot fetch advertised recovery history for new submodule ${path}`;
+    }
+    const recovered = spawnSync(
+      "git",
+      ["-C", recoveryRepo, "cat-file", "-e", `${commit}^{commit}`],
+      { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+    );
+    if (recovered.status === 0) return null;
+  } finally {
+    rmSync(recoveryRepo, { recursive: true, force: true });
+  }
+  return `new submodule ${path} commit ${commit} is not reachable from an advertised recovery ref`;
+}
+
+function initializedSubmoduleSourceError(
+  subDir: string,
+  displayPath: string,
+  visited: Set<string>,
+  depth = 1,
+): string | null {
+  if (depth > 64) {
+    return `cannot verify initialized submodule ${displayPath}: nesting exceeds 64 levels`;
+  }
+  let real: string;
+  try {
+    real = realpathSync(subDir);
+  } catch {
+    return `cannot resolve initialized submodule ${displayPath}`;
+  }
+  if (visited.has(real)) return null;
+  visited.add(real);
+  if (visited.size > 10_000) {
+    return "cannot verify initialized submodules: more than 10000 checkouts are materialized";
+  }
+
+  const status = spawnSync(
+    "git",
+    [
+      "-C",
+      subDir,
+      "status",
+      "--porcelain=v1",
+      "-z",
+      "--untracked-files=all",
+      "--ignore-submodules=none",
+    ],
+    { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+  );
+  if (status.status !== 0) {
+    return `cannot verify reviewed submodule state for ${displayPath}`;
+  }
+  if (status.stdout.length > 0) {
+    return (
+      `cannot bind dirty initialized submodule ${displayPath}; commit or discard its reviewed ` +
+      "changes, then re-run the reviewer before finalizing"
+    );
+  }
+
+  const sourcePaths = workspaceSourceSnapshotPaths(subDir, false);
+  if (sourcePaths === null) {
+    return `cannot resolve the reviewed source boundary for initialized submodule ${displayPath}`;
+  }
+  if (sourcePaths.length > 0) {
+    const ignored = spawnSync(
+      "git",
+      ["-C", subDir, "check-ignore", "-z", "--stdin"],
+      {
+        input: `${sourcePaths.join("\0")}\0`,
+        encoding: "utf-8",
+        maxBuffer: 512 * 1024 * 1024,
+      },
+    );
+    if (ignored.status !== 0 && ignored.status !== 1) {
+      return `cannot verify ignored reviewed source for initialized submodule ${displayPath}`;
+    }
+    if (ignored.status === 0 && ignored.stdout.length > 0) {
+      return (
+        `cannot bind dirty initialized submodule ${displayPath}; ignored application source ` +
+        "is part of the reviewed fingerprint but cannot be represented by the parent gitlink"
+      );
+    }
+  }
+
+  const gitlinks = spawnSync(
+    "git",
+    ["-C", subDir, "ls-files", "-s", "-z"],
+    { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+  );
+  if (gitlinks.status !== 0) {
+    return `cannot enumerate nested submodules for ${displayPath}`;
+  }
+  const trackedNestedPaths = new Set<string>();
+  for (const record of gitlinks.stdout.split("\0")) {
+    if (!record.startsWith("160000 ")) continue;
+    const tab = record.indexOf("\t");
+    if (tab === -1) {
+      return `cannot parse a nested submodule gitlink under ${displayPath}`;
+    }
+    const nestedPath = record.slice(tab + 1);
+    trackedNestedPaths.add(nestedPath.replace(/\\/g, "/"));
+    const nestedDir = join(subDir, nestedPath);
+    if (!existsSync(join(nestedDir, ".git"))) continue;
+    const nestedError = initializedSubmoduleSourceError(
+      nestedDir,
+      `${displayPath}/${nestedPath.replace(/\\/g, "/")}`,
+      visited,
+      depth + 1,
+    );
+    if (nestedError) return nestedError;
+  }
+  const embeddedPaths = workspaceSourceEmbeddedGitPaths(subDir, false);
+  if (embeddedPaths === null) {
+    return `cannot resolve embedded Git checkouts under initialized submodule ${displayPath}`;
+  }
+  for (const embeddedPath of embeddedPaths) {
+    if (trackedNestedPaths.has(embeddedPath)) continue;
+    const embeddedDir = join(subDir, embeddedPath);
+    if (!existsSync(join(embeddedDir, ".git"))) continue;
+    const embeddedDisplayPath = `${displayPath}/${embeddedPath}`;
+    const embeddedError = initializedSubmoduleSourceError(
+      embeddedDir,
+      embeddedDisplayPath,
+      visited,
+      depth + 1,
+    );
+    if (embeddedError) return embeddedError;
+    return (
+      `cannot bind embedded Git checkout ${embeddedDisplayPath}: it is not a tracked submodule. ` +
+      "Use git submodule add so the parent records a gitlink and .gitmodules recovery metadata, " +
+      "or flatten/remove the embedded checkout before re-running review."
+    );
+  }
+  return null;
+}
+
 function bindReviewedSource(
   projectDir: string,
   unit: string,
@@ -510,7 +872,39 @@ function bindReviewedSource(
     const head = git(["rev-parse", "HEAD^{commit}"]);
     if (head.status !== 0 || !head.stdout.trim()) return { error: "cannot resolve the Bolt HEAD commit" };
     if (git(["read-tree", "HEAD"]).status !== 0) return { error: "cannot seed the source snapshot index" };
+    const initialSubmodules = git(["ls-files", "-s", "-z"]);
+    if (initialSubmodules.status !== 0) {
+      return { error: "cannot enumerate pre-shape submodule state" };
+    }
+    const initialGitlinkPaths = new Set<string>();
+    for (const record of initialSubmodules.stdout.split("\0")) {
+      if (!record.startsWith("160000 ")) continue;
+      const tab = record.indexOf("\t");
+      if (tab === -1) {
+        return { error: "cannot parse a pre-shape submodule gitlink" };
+      }
+      initialGitlinkPaths.add(record.slice(tab + 1).replace(/\\/g, "/"));
+    }
     if (git(["add", "-A"]).status !== 0) return { error: "cannot stage the reviewed source snapshot" };
+    if (!shapeSourceSnapshotIndex(wt, idx, true)) {
+      return { error: "cannot apply the reviewed source boundary to the snapshot" };
+    }
+    const modulesIndexed = git([
+      "ls-files",
+      "--error-unmatch",
+      "--",
+      ".gitmodules",
+    ]);
+    let recoverableNewGitlinks = new Map<string, string>();
+    if (modulesIndexed.status === 0) {
+      const recoverable = recoverableSubmoduleUrls(wt);
+      if (recoverable === null) {
+        return { error: "cannot parse .gitmodules recovery metadata" };
+      }
+      recoverableNewGitlinks = recoverable;
+    } else if (modulesIndexed.status !== 1) {
+      return { error: "cannot verify .gitmodules snapshot state" };
+    }
     // The parent tree can represent only a submodule's checked-out commit
     // (mode 160000), never dirty bytes inside that checkout. The fingerprint
     // deliberately includes those bytes, so accepting them here would produce
@@ -520,25 +914,43 @@ function bindReviewedSource(
     // gitlink above.
     const submodules = git(["ls-files", "-s", "-z"]);
     if (submodules.status !== 0) return { error: "cannot verify reviewed submodule state" };
+    const visitedSubmodules = new Set<string>();
     for (const record of submodules.stdout.split("\0")) {
       if (!record.startsWith("160000 ")) continue;
       const tab = record.indexOf("\t");
       if (tab === -1) return { error: "cannot parse a reviewed submodule gitlink" };
+      const commit = record.slice(0, tab).split(" ")[1] ?? "";
+      if (!/^[0-9a-f]{40,64}$/.test(commit)) {
+        return { error: "cannot parse a reviewed submodule commit" };
+      }
       const path = record.slice(tab + 1);
       const subDir = join(wt, path);
       if (!existsSync(join(subDir, ".git"))) continue; // uninitialized: no reviewed bytes to carry
-      const status = spawnSync(
-        "git",
-        ["-C", subDir, "status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignore-submodules=none"],
-        { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+      const submoduleError = initializedSubmoduleSourceError(
+        subDir,
+        path.replace(/\\/g, "/"),
+        visitedSubmodules,
       );
-      if (status.status !== 0) return { error: `cannot verify reviewed submodule state for ${path}` };
-      if (status.stdout.length > 0) {
+      if (submoduleError) return { error: submoduleError };
+      const normalizedPath = path.replace(/\\/g, "/");
+      if (!initialGitlinkPaths.has(normalizedPath)) {
+        const recoveryUrl = recoverableNewGitlinks.get(normalizedPath);
+        if (recoveryUrl) {
+          const recoveryError = newGitlinkRecoveryError(
+            wt,
+            subDir,
+            normalizedPath,
+            recoveryUrl,
+            commit,
+          );
+          if (recoveryError) return { error: recoveryError };
+          continue;
+        }
         return {
-          error: (
-            `cannot bind dirty initialized submodule ${path}; commit or discard its reviewed ` +
-            `changes, then re-run the reviewer before finalizing`
-          ),
+          error:
+            `cannot bind embedded Git checkout ${normalizedPath}: it is not a tracked submodule. ` +
+            "Use git submodule add so the parent records a gitlink and .gitmodules recovery metadata, " +
+            "or flatten/remove the embedded checkout before re-running review.",
         };
       }
     }
@@ -562,6 +974,18 @@ function bindReviewedSource(
       "reset", "-q", "HEAD", "--",
       ":(top)aidlc/", ":(top).aidlc/",
       ":(glob)**/aidlc/spaces/*/intents/**/.aidlc-sensors/**",
+      ":(glob)**/.cache/**",
+      ":(glob)**/.git/**",
+      ":(glob)**/.gradle/**",
+      ":(glob)**/.mypy_cache/**",
+      ":(glob)**/.next/**",
+      ":(glob)**/.nuxt/**",
+      ":(glob)**/.pytest_cache/**",
+      ":(glob)**/.ruff_cache/**",
+      ":(glob)**/.tox/**",
+      ":(glob)**/.venv/**",
+      ":(glob)**/node_modules/**",
+      ":(glob)**/venv/**",
     ]);
     if (restore.status !== 0) return { error: "cannot exclude framework state from the source snapshot" };
     const tree = git(["write-tree"]);

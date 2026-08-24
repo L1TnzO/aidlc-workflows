@@ -214,6 +214,67 @@ before that newest review can be revalidated by one later unit receipt. That
 explicit policy is the accepted limitation until RFC #662 adds a machine-readable
 per-unit source-path manifest. New `unbindable` receipts fail closed; only
 pre-#629 receipts with no field retain migration behavior.
+
+The source boundary is one Git-independent, bounded filesystem identity, so
+adding/removing repository metadata or changing Git executable availability
+does not invalidate an unchanged review. It excludes the workspace shell, exact
+AI-DLC sensor caches, VCS metadata, dependency/cache directories or symlinks,
+and unregistered conditional generated-output directories or symlinks. Ordinary
+and ignored application source remains bound. To include real source beneath
+`build/`, `coverage/`, `dist/`, `logs/`, `target/`, or `tmp/` (including source
+reached through such a symlink), or ignored binary/extensionless source that is
+not an ordinary source candidate, add a root `.aidlc-source-paths.json`:
+
+```json
+{"version":1,"paths":["dist/worker.js","build/source"]}
+```
+
+Paths are workspace-relative; traversal, absolute, framework, sensor-cache, and
+dependency paths are rejected, and the registry is itself part of the
+fingerprint. Registered files are bound regardless of binary/text encoding and
+are force-added to autonomous swarm Source Commits. For an internal directory
+alias, the commit carries both the link and registered/ignored source through
+its resolved physical repository path; registered deletions are reapplied from
+`HEAD`, not inferred from the mutable real index. Resolved physical aliases are
+validated against the same active-harness, framework, sensor-cache, and
+dependency/cache exclusions as logical registry paths. External target bytes
+remain freshness evidence while the commit carries the link. Ordinary ignored source
+candidates are also force-added, keeping review, finalization, and later merge
+on one source boundary. Real-path deduplication is keyed by inclusion mode and
+registry alias, so source-only traversal cannot hide stronger registered binary
+evidence. Initialized submodules are validated recursively, bounded to 64
+levels and 10,000 materialized checkouts. Any level rejects tracked, untracked,
+or ignored application source that cannot be represented by its parent gitlink;
+ignored dependency/cache paths remain excluded. An ignored embedded Git checkout
+is first promoted to a temporary gitlink snapshot candidate, then enters the
+same recursive validation. Dirty or ignored application source refuses
+finalization. Gitlink authority is baselined from `HEAD` before worktree overlay:
+a bare checkout discovered by `git add -A` is refused, while a genuinely new
+submodule is accepted only when the same Source Commit also carries matching
+`.gitmodules` path and URL recovery metadata and the exact gitlink commit is
+reachable from endpoint-advertised ref history. The endpoint's exact
+clone-relevant current `HEAD`, branch, and tag refs are fetched once into an
+isolated temporary bare repository, and the pinned commit must be present in
+that fetched history; advertisement alone never proves availability, even when
+the gitlink equals a current ref tip. This remains valid when a ref advanced,
+was renamed, or was newly published after the initialized clone. Relative URLs
+are resolved against the parent remote and must match the initialized
+submodule origin. Recovery probing is non-interactive, bounded to 10,000
+advertised recovery refs and 1 MiB of refspec input, constant in command-line
+shape, and capped at 15 seconds.
+Convert undeclared or unrecoverable checkouts with `git submodule add`,
+repair/publish their remote, or flatten them before re-reviewing. Identity
+traversal streams and caps
+entries, directories, symlinks, files, and bytes.
+Snapshot force-add and excluded-symlink Git path batches are bounded by count
+and a conservative Windows UTF-16 command-line budget.
+Multi-repo identities bind
+top-level workspace-roof files plus exactly the intent's registered
+repositories. Roof directories are outside the default partition and can be
+re-included through the same source registry, so unrelated siblings cannot
+enter merely because their `.git` metadata disappears. An absent registered
+repository contributes a stable marker, so its later appearance invalidates
+prior receipts instead of leaving the source silently uncovered.
 `AIDLC_SKIP_SOURCE_FRESHNESS=1` disables the check. Swarm finalization records an
 immutable reviewed `Source Commit`; a bypassed finalize records
 `Source Freshness Bypass: true`, and merge must repeat the same switch.
@@ -317,7 +378,7 @@ Session hooks check for the active intent's `aidlc-state.md` (under `aidlc/space
 | `QUESTION_ANSWERED` | `tools/aidlc-log.ts` | Fires after a non-gate question response; approval choices are lifecycle events owned by `report` |
 | `SUMMARY_CONFIRMATION_RECORDED` | `tools/aidlc-log.ts` | Human-backed consolidated-summary receipt; new rows carry `Hash Scope: confirmed-content-v1`, which preserves the canonical order of the preamble and all visible Q<n> and feedback sections, including follow-up questions after an assumption decision. Exactly one post-summary `Assumption Confirmation` section and its contents are excluded; a same-named pre-summary section remains hashed. Any other visible Markdown or raw-HTML heading after the summary fails closed. Stage-specific pre-summary headings remain valid. Unscoped receipts retain legacy whole-file verification and need reconfirmation after an allowed append. Reserved from public audit append. |
 | `REVIEW_REQUESTED` | `tools/aidlc-log.ts` | Fires when the conductor dispatches the reviewer defined by `stage-protocol-reviewer.md` §12a, records the artifact fingerprint sent for review, and rejects a second normal request while one is unmatched. `--unit` must name a member of the authoritative DAG; a legacy no-DAG swarm may instead prove the exact Unit through a matching, still-open tool-owned Bolt attempt. `--retry-pending` re-dispatches the exact unmatched ordinal. |
-| `REVIEW_COMPLETED` | `tools/aidlc-log.ts` | Fires only after a matching positive-iteration `REVIEW_REQUESTED` whose request fingerprint still equals both the verdict fingerprint and the current declared output paths and bytes; a write during review requires re-dispatch before a verdict can be recorded. `READY` is terminal immediately; advisory `NOT-READY` is terminal after its normal-flow pass; adversarial `NOT-READY` is terminal only at `reviewer_max_iterations` (earlier rows expose repair/retry progress to a wave). A terminal receipt invalidated by a later declared-output or source write gets one distinct recovery request at the next ordinal; either recovery verdict is terminal, and a second invalidation requires human reset. `workspace_requires` stages also record `Source Fingerprint` (a git-native source hash, or `unbindable`); modern unbindable receipts fail closed, while fieldless pre-#629 rows retain migration behavior. Gate-opening transitions (`gate-start` and `revise`) and all completing state transitions (`approve`, `advance`, `finalize`, and `complete-workflow`) require a matching terminal receipt from the current workflow attempt; per-unit stages require one receipt per applicable unit, while only a Unit-less receipt can satisfy a no-DAG stage-level fallback. Autonomous swarm finalization additionally requires each configured unit's paired terminal receipt after its Bolt started, current artifact and source bindings, and every applicable required artifact to exist as a file in that Bolt worktree; absent optional outputs remain valid fingerprint entries. |
+| `REVIEW_COMPLETED` | `tools/aidlc-log.ts` | Fires only after a matching positive-iteration `REVIEW_REQUESTED` whose request fingerprint still equals both the verdict fingerprint and the current declared output paths and bytes; a write during review requires re-dispatch before a verdict can be recorded. `READY` is terminal immediately; advisory `NOT-READY` is terminal after its normal-flow pass; adversarial `NOT-READY` is terminal only at `reviewer_max_iterations` (earlier rows expose repair/retry progress to a wave). A terminal receipt invalidated by a later declared-output or source write gets one distinct recovery request at the next ordinal; either recovery verdict is terminal, and a second invalidation requires human reset. `workspace_requires` stages also record `Source Fingerprint` (the Git-independent bounded filesystem identity, or `unbindable` when that identity cannot be read safely); modern unbindable receipts fail closed, while fieldless pre-#629 rows retain migration behavior. Gate-opening transitions (`gate-start` and `revise`) and all completing state transitions (`approve`, `advance`, `finalize`, and `complete-workflow`) require a matching terminal receipt from the current workflow attempt; per-unit stages require one receipt per applicable unit, while only a Unit-less receipt can satisfy a no-DAG stage-level fallback. Autonomous swarm finalization additionally requires each configured unit's paired terminal receipt after its Bolt started, current artifact and source bindings, and every applicable required artifact to exist as a file in that Bolt worktree; absent optional outputs remain valid fingerprint entries. |
 | `PIPELINE_LINK_COMPLETED` | `tools/aidlc-log.ts` | Fires after one declared pipeline link returns. Carries `Stage`, `Link`, and `Position k/N`; multi-repo chains also carry `Repo`, and isolated runs carry `Workflow=single-stage:<slug>`. The tool refuses undeclared, duplicate, or out-of-order links within that receipt scope. Main-workflow gate-start, approval, advance, finalize, and workflow completion ignore isolated rows and require every scanned-repo current-attempt link receipt. |
 
 ### Unit lifecycle (inline per-unit Construction stages)

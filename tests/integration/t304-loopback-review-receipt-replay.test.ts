@@ -91,7 +91,6 @@ function run(
       AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
       AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
       AIDLC_SKIP_REVISION_BACKSTOP: "1",
-      AIDLC_SKIP_SOURCE_FRESHNESS: "1",
     },
   });
   const stdout = result.stdout ?? "";
@@ -118,7 +117,6 @@ function next(args: string[] = []): Directive {
       AIDLC_SKIP_HUMAN_PRESENCE_GUARD: "1",
       AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD: "1",
       AIDLC_SKIP_REVISION_BACKSTOP: "1",
-      AIDLC_SKIP_SOURCE_FRESHNESS: "1",
     },
   });
   expect(result.status).toBe(0);

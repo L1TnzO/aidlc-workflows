@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
-import { accessSync, appendFileSync, closeSync, constants as fsConstants, cpSync, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, readdirSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { accessSync, appendFileSync, closeSync, constants as fsConstants, cpSync, existsSync, fstatSync, linkSync, lstatSync, mkdirSync, openSync, opendirSync, readdirSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve as resolvePath, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -5886,18 +5886,24 @@ export function repoDir(projectDir: string, repoName: string): string {
 // bound to the SOURCE STATE the reviewer actually inspected: workspace writes
 // deliberately emit no audit events (aidlc-audit-logger.ts excludes them), so
 // without a binding a post-review source edit leaves the receipt satisfying the
-// completion guard for code nobody re-reviewed. The binding is a git-native
-// content fingerprint: per repo, a `git write-tree` over a TEMPORARY index
-// seeded from HEAD with `git add -A` applied — the exact tracked + untracked
-// (gitignore-respecting) content state, computed without touching the real
-// index or worktree. Reverting an edit restores the original fingerprint
+// completion guard for code nobody re-reviewed. The binding is one canonical,
+// bounded filesystem identity, independent of repository metadata and Git
+// executable availability. It makes supported non-Git and missing-Git
+// workspaces bindable, includes ignored application bytes, and excludes only
+// explicit framework/dependency/cache and generated-output boundaries.
+// Reverting an edit restores the original fingerprint
 // (content-addressed), so an undone change does not strand a receipt.
 //
 // Multi-repo: the intent's recorded repo set (intentRepos), each resolved via
 // repoDir(); no recorded repos = the legacy single-repo default (projectDir).
-// Returns null when ANY target dir is not a usable git checkout. New receipts
-// record that explicitly as `unbindable` and completion fails closed; only a
-// legacy receipt with no fingerprint field keeps the migration fail-open.
+// The workspace roof is a separate source boundary: top-level files such as
+// compose manifests remain covered, while top-level directories stay outside
+// unless .aidlc-source-paths.json explicitly re-includes one. That stable
+// partition prevents unrelated siblings from entering when their `.git`
+// metadata disappears. Missing registered repos carry a stable marker and
+// change the identity when they appear. Null now means the bounded scan itself
+// was unreadable, unstable, over budget, or misconfigured, not merely that Git
+// or a repository is absent.
 
 // The record tree and the CLI/IDE workspace shell are anchored at the top level
 // of the dir that CARRIES the shell: the workspace roof, or a Bolt worktree
@@ -5905,9 +5911,10 @@ export function repoDir(projectDir: string, repoName: string): string {
 // SIBLING of the repo dirs (resolveConstructionRepo / repoDir) and
 // `.aidlc/worktrees/` (worktreePath) hangs off the roof - neither is ever
 // legitimately inside a fingerprinted repo or submodule, where a directory of
-// those names is application source (#646 review). The trailing slash keeps the
-// pathspec a directory match, so a root FILE named `aidlc` stays in the walk.
-const AIDLC_SHELL_DIR_NAMES = ["aidlc/", ".aidlc/"];
+// those names is application source (#646 review). Files with these names stay
+// source; the walker and Git snapshot shape exclude only directory/symlink
+// entries at the shell-carrying root.
+const AIDLC_SHELL_PATHS = ["aidlc", ".aidlc"];
 
 // The sensor cache is the one member of the family that is NOT root-anchored:
 // the type-check sensor anchors `.aidlc-sensors/.tsbuildinfo` at the tsconfig
@@ -5941,13 +5948,59 @@ const AIDLC_SENSOR_CACHE_GLOBS = [
   ":(glob)**/aidlc/spaces/*/intents/**/.aidlc-sensors/**",
 ];
 
-// Git runs a configured `clean` filter as content enters the index, so the tree
-// written below hashes the FILTERED bytes - not the bytes sitting in the
-// worktree. A lossy filter therefore maps two different worktrees onto one
-// fingerprint (#646 review, reproduced: two `app.ts` contents, one tree), and
-// the stage executes against the bytes the reviewer read, so those are what the
-// receipt has to bind. Fold a raw (`--no-filters`) hash of exactly the paths a
-// clean driver touches into the fingerprint.
+// Dependency and machine-local cache trees are never application source. These
+// names are excluded at every depth in both Git and filesystem modes so a
+// missing Git executable cannot turn a normal dependency install into a
+// multi-gigabyte freshness walk.
+const SOURCE_FINGERPRINT_HARD_EXCLUDED_NAMES = [
+  ".cache",
+  ".git",
+  ".gradle",
+  ".mypy_cache",
+  ".next",
+  ".nuxt",
+  ".pytest_cache",
+  ".ruff_cache",
+  ".tox",
+  ".venv",
+  "node_modules",
+  "venv",
+] as const;
+const SOURCE_FINGERPRINT_HARD_EXCLUDED_DIRS = new Set(
+  SOURCE_FINGERPRINT_HARD_EXCLUDED_NAMES,
+);
+const SOURCE_FINGERPRINT_HARD_EXCLUDED_GLOBS =
+  SOURCE_FINGERPRINT_HARD_EXCLUDED_NAMES.map(
+    (name) => `:(glob)**/${name}/**`,
+  );
+
+// These names commonly hold generated output, but can also hold real source.
+// They are always outside the default identity so repository/Git availability
+// cannot change the boundary. Real source beneath them must be named explicitly
+// in .aidlc-source-paths.json; registered paths are content-bound regardless of
+// extension or binary/text encoding.
+const SOURCE_FINGERPRINT_CONDITIONAL_NAMES = [
+  "build",
+  "coverage",
+  "dist",
+  "logs",
+  "target",
+  "tmp",
+] as const;
+const SOURCE_FINGERPRINT_CONDITIONAL_DIRS = new Set(
+  SOURCE_FINGERPRINT_CONDITIONAL_NAMES,
+);
+const SOURCE_FINGERPRINT_CONDITIONAL_GLOBS =
+  SOURCE_FINGERPRINT_CONDITIONAL_NAMES.map(
+    (name) => `:(glob)**/${name}/**`,
+  );
+const SOURCE_FINGERPRINT_REGISTRY = ".aidlc-source-paths.json";
+
+// Git runs a configured `clean` filter as content enters a swarm snapshot index.
+// The canonical fingerprint already hashes the raw filesystem bytes, so the
+// immutable Source Commit must replace filtered index blobs with those same raw
+// bytes. A lossy filter must not make the later merge differ from the source the
+// reviewer inspected.
 //
 // Scoped by attribute AND configured driver, because both are required for a
 // filter to run at all: a `.gitattributes` naming `filter=tidy` is inert unless
@@ -6096,118 +6149,132 @@ export function filteredRawIndexEntries(
   return cleanFilteredRawLines(repoDir, env, paths)?.entries ?? null;
 }
 
-// `carriesWorkspaceShell` is REQUIRED, never defaulted: a new call site must
-// decide, so the shell exclusion cannot leak into a derived dir by omission.
-function gitTreeFingerprint(repoDir: string, carriesWorkspaceShell: boolean): string | null {
-  if (!isGitRepoDir(repoDir)) return null;
-  const idx = join(
-    tmpdir(),
-    `aidlc-src-fp-${process.pid}-${randomUUID().slice(0, 8)}`,
-  );
-  const env = { ...process.env, GIT_INDEX_FILE: idx };
-  try {
-    // Seed from HEAD so deletions of tracked files change the tree. An unborn
-    // HEAD (fresh init) fails read-tree; the empty temp index is then correct.
-    spawnSync("git", ["-C", repoDir, "read-tree", "HEAD"], { env, encoding: "utf-8" });
-    const add = spawnSync("git", ["-C", repoDir, "add", "-A"], { env, encoding: "utf-8" });
-    if (add.status !== 0) return null;
-    // Drop the aidlc workspace family from the fingerprint, at ANY depth: the
-    // record tree is COMMITTED by design and mutates on every engine action
-    // (the very REVIEW_COMPLETED append this fingerprint is stamped into,
-    // gate rows, state updates), so including it would make every receipt
-    // stale by the time the completion guard recomputes. Record-artifact
-    // freshness is already covered by the audit-event invalidation; this
-    // fingerprint is the APPLICATION SOURCE binding. --ignore-unmatch keeps
-    // this a no-op when nothing matches (sibling repos with no aidlc tree).
-    const excluded = [
-      ...(carriesWorkspaceShell ? AIDLC_SHELL_DIR_NAMES : []),
-      ...AIDLC_SENSOR_CACHE_GLOBS,
-    ];
-    if (excluded.length > 0) {
-      spawnSync(
-        "git",
-        ["-C", repoDir, "rm", "-r", "-q", "--cached", "--ignore-unmatch", "--", ...excluded],
-        { env, encoding: "utf-8" },
-      );
+function sourceSnapshotPathBatches(
+  repoDir: string,
+  paths: string[],
+): string[][] | null {
+  // CreateProcess accepts at most 32,767 UTF-16 command-line code units.
+  // Reserve ample room for the executable, `-C <repo> add -f -A --`, quoting,
+  // and Bun/Node launcher behavior. The 256-path cap also bounds POSIX argv.
+  const maxEstimatedUnits = 20_000;
+  const maxPaths = 256;
+  const baseUnits = 512 + repoDir.length * 2;
+  const batches: string[][] = [];
+  let batch: string[] = [];
+  let units = baseUnits;
+  for (const path of paths) {
+    // Windows quoting can double backslashes before a quote. Doubling every
+    // code unit is deliberately conservative and keeps one path independently
+    // bounded before it reaches spawnSync.
+    const pathUnits = path.length * 2 + 4;
+    if (baseUnits + pathUnits > maxEstimatedUnits) return null;
+    if (
+      batch.length > 0 &&
+      (batch.length >= maxPaths || units + pathUnits > maxEstimatedUnits)
+    ) {
+      batches.push(batch);
+      batch = [];
+      units = baseUnits;
     }
-    const wt = spawnSync("git", ["-C", repoDir, "write-tree"], { env, encoding: "utf-8" });
-    if (wt.status !== 0) return null;
-    const sha = wt.stdout.trim();
-    if (sha.length === 0) return null;
-
-    // A submodule is recorded in the tree above as a gitlink (its checked-out
-    // commit sha), so editing its tracked source WITHOUT committing inside the
-    // submodule leaves the gitlink - and therefore `sha` above - unchanged,
-    // shipping a reviewed-then-edited submodule as if nothing had changed.
-    // Fold each INITIALIZED submodule's own fingerprint (recursive - a
-    // submodule can itself nest submodules) into the parent's. An
-    // uninitialized submodule has no materialized content in the workspace,
-    // so it contributes nothing to bind. Gitlinks are read straight off the
-    // temp index (mode 160000 in `ls-files -s`) rather than via `git submodule
-    // status`, which spawns the submodule subsystem and measured 1s+ per call
-    // on Windows - a cost this fingerprint (recomputed on every completion
-    // route) cannot afford.
-    //
-    // `-z` is required, not cosmetic (#646 review): without
-    // it, git's default `core.quotePath` wraps a path containing a non-ASCII
-    // byte or other "unusual" character in double quotes and C-escapes it
-    // (e.g. `"vendor/caf\303\251"` for `vendor/café`) - parsed as a literal
-    // string, that quoted-and-escaped text never resolves to the real
-    // on-disk path, so `isGitRepoDir` silently reports "not a submodule" and
-    // the fingerprint drops it entirely (a reviewed-then-edited submodule at
-    // such a path would ship unreviewed). `-z` disables quoting and
-    // NUL-terminates each record instead of newline-terminating it, so the
-    // path bytes come back exactly as they are on disk.
-    // A large index overruns the default buffer: the call then fails with
-    // ENOBUFS, and every submodule and clean-filtered path drops out of the
-    // fingerprint while the bare tree sha is still returned as if the repo had
-    // neither (#646 review - reproduced at 8,000 tracked paths / 1.68 MB of
-    // listing). Sized well past any index this is expected to meet.
-    const lsFiles = spawnSync("git", ["-C", repoDir, "ls-files", "-s", "-z"], { env, encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 });
-    // Fail closed. A listing that could not be read is not evidence that the
-    // repository has no submodules and no filtered paths, and the caller reads
-    // null as "cannot bind this workspace" rather than as a clean tree.
-    if (lsFiles.status !== 0) return null;
-    const subLines: string[] = [];
-    // The same listing feeds the clean-filter scan below, so binding raw bytes
-    // costs no extra walk of the index.
-    const blobPaths: string[] = [];
-    for (const record of lsFiles.stdout.split("\0")) {
-      const tabIdx = record.indexOf("\t");
-      if (tabIdx === -1) continue;
-      const entryPath = record.slice(tabIdx + 1);
-      if (!entryPath) continue;
-      if (!record.startsWith("160000 ")) {
-        // Attribute filters apply to regular blobs, not mode-120000 symlinks.
-        // Hashing a symlink path with `hash-object --no-filters` follows its
-        // destination, making external target bytes part of the fingerprint.
-        if (/^100(?:644|755) /.test(record)) blobPaths.push(entryPath);
-        continue;
-      }
-      const subDir = join(repoDir, entryPath);
-      if (!isGitRepoDir(subDir)) continue;
-      // A submodule's own `aidlc/` is the submodule's application source.
-      const subFp = gitTreeFingerprint(subDir, false);
-      if (subFp === null) return null;
-      subLines.push(`${entryPath}=${subFp}`);
-    }
-    const raw = cleanFilteredRawLines(repoDir, env, blobPaths);
-    if (raw === null) return null;
-    const rawLines = raw.lines;
-    // A repo with neither submodules nor clean-filtered paths keeps returning
-    // the bare tree sha, so the common workspace's fingerprint is unchanged by
-    // this and receipts stamped before it stay comparable.
-    if (subLines.length === 0 && rawLines.length === 0) return sha;
-    subLines.sort();
-    rawLines.sort();
-    // `raw:` prefixes the filtered-content rows so they cannot be confused with
-    // a submodule row whose path and sha happen to line up.
-    return createHash("sha256")
-      .update([sha, ...subLines, ...rawLines].join("\n"))
-      .digest("hex");
-  } finally {
-    rmSync(idx, { force: true });
+    batch.push(path);
+    units += pathUnits;
   }
+  if (batch.length > 0) batches.push(batch);
+  return batches;
+}
+
+// Shape a caller-owned temporary index to the same source boundary used by the
+// fingerprint. The caller seeds and overlays the index first; this helper then
+// restores framework/dependency/cache/generated paths to HEAD and force-adds
+// ignored source candidates plus every explicitly registered path (including
+// binary source). Swarm uses the same helper before writing its immutable
+// Source Commit.
+export function shapeSourceSnapshotIndex(
+  repoDir: string,
+  indexFile: string,
+  carriesWorkspaceShell: boolean,
+): boolean {
+  const sourceIdentity = filesystemSourceIdentity(
+    repoDir,
+    carriesWorkspaceShell,
+  );
+  if (sourceIdentity === null) return false;
+  const env = { ...process.env, GIT_INDEX_FILE: indexFile };
+  const staticExcluded = [
+    ...(carriesWorkspaceShell
+      ? [
+          ...AIDLC_SHELL_PATHS.map((path) => `${path}/`),
+          `${harnessDir()}/`,
+        ]
+      : []),
+    ...AIDLC_SENSOR_CACHE_GLOBS,
+    ...SOURCE_FINGERPRINT_HARD_EXCLUDED_GLOBS,
+    ...SOURCE_FINGERPRINT_CONDITIONAL_GLOBS,
+  ];
+  if (staticExcluded.length > 0) {
+    const restored = spawnSync(
+      "git",
+      [
+        "-C",
+        repoDir,
+        "reset",
+        "-q",
+        "HEAD",
+        "--",
+        ...staticExcluded,
+      ],
+      { env, encoding: "utf-8" },
+    );
+    if (restored.status !== 0) return false;
+  }
+  const symlinkBatches = sourceSnapshotPathBatches(
+    repoDir,
+    sourceIdentity.excludedSymlinkPathspecs,
+  );
+  if (symlinkBatches === null) return false;
+  for (const batch of symlinkBatches) {
+    const restored = spawnSync(
+      "git",
+      ["-C", repoDir, "reset", "-q", "HEAD", "--", ...batch],
+      { env, encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+    );
+    if (restored.status !== 0) return false;
+  }
+
+  const forcePaths = new Set(sourceIdentity.snapshotPaths);
+  for (const path of sourceIdentity.registeredSnapshotPaths) {
+    if (existsSync(join(repoDir, path))) {
+      forcePaths.add(path);
+      continue;
+    }
+    const tracked = spawnSync(
+      "git",
+      ["-C", repoDir, "ls-tree", "-r", "-z", "--name-only", "HEAD", "--", path],
+      { encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+    );
+    if (tracked.status !== 0) return false;
+    if (tracked.stdout.length > 0) forcePaths.add(path);
+  }
+  const sortedForcePaths = [...forcePaths].sort();
+  const forceBatches = sourceSnapshotPathBatches(repoDir, sortedForcePaths);
+  if (forceBatches === null) return false;
+  for (const batch of forceBatches) {
+    const restored = spawnSync(
+      "git",
+      [
+        "-C",
+        repoDir,
+        "add",
+        "-f",
+        "-A",
+        "--",
+        ...batch,
+      ],
+      { env, encoding: "utf-8", maxBuffer: 512 * 1024 * 1024 },
+    );
+    if (restored.status !== 0) return false;
+  }
+  return true;
 }
 
 // Recorded in place of a fingerprint when one cannot be computed, so a receipt
@@ -6215,20 +6282,780 @@ function gitTreeFingerprint(repoDir: string, carriesWorkspaceShell: boolean): st
 // pre-#629 receipt that carries no field at all (#646 review).
 export const UNBINDABLE_FINGERPRINT = "unbindable";
 
+function sourceIdentityBudget(name: string, fallback: number): number {
+  const raw = process.env[name];
+  if (raw && /^[1-9][0-9]*$/.test(raw)) return Number(raw);
+  return fallback;
+}
+
+function sourceFingerprintRegistryPaths(
+  root: string,
+  carriesWorkspaceShell: boolean,
+): Set<string> | null {
+  const registryPath = join(root, SOURCE_FINGERPRINT_REGISTRY);
+  if (!existsSync(registryPath)) return new Set();
+  try {
+    const registryStat = statSync(registryPath);
+    if (
+      !registryStat.isFile() ||
+      registryStat.size > 1024 * 1024
+    ) {
+      return null;
+    }
+    const parsed = JSON.parse(readFileSync(registryPath, "utf-8")) as {
+      version?: unknown;
+      paths?: unknown;
+    };
+    if (
+      parsed.version !== 1 ||
+      !Array.isArray(parsed.paths) ||
+      parsed.paths.length > 10_000 ||
+      parsed.paths.some((path) => typeof path !== "string")
+    ) {
+      return null;
+    }
+    const paths = new Set<string>();
+    for (const raw of parsed.paths) {
+      const path = String(raw)
+        .replace(/\\/g, "/")
+        .replace(/^\.\/+/, "")
+        .replace(/\/+$/, "");
+      if (
+        path.length === 0 ||
+        path.length > 4096 ||
+        path === "." ||
+        path.includes("\0") ||
+        isAbsolute(path) ||
+        /^[A-Za-z]:\//.test(path) ||
+        path.startsWith("//") ||
+        path
+          .split("/")
+          .some((part) => part.length === 0 || part === "." || part === "..")
+      ) {
+        return null;
+      }
+      const parts = path.split("/");
+      if (
+        (
+          carriesWorkspaceShell &&
+          (
+            parts[0] === "aidlc" ||
+            parts[0] === ".aidlc" ||
+            parts[0] === harnessDir()
+          )
+        ) ||
+        parts.some((part) => SOURCE_FINGERPRINT_HARD_EXCLUDED_DIRS.has(part)) ||
+        isAidlcSensorCachePath(path)
+      ) {
+        return null;
+      }
+      paths.add(path);
+    }
+    return paths;
+  } catch {
+    return null;
+  }
+}
+
+function sourcePathPhysicallyExcluded(
+  path: string,
+  carriesWorkspaceShell: boolean,
+): boolean {
+  const parts = path.split("/");
+  return (
+    (
+      carriesWorkspaceShell &&
+      (
+        parts[0] === "aidlc" ||
+        parts[0] === ".aidlc" ||
+        parts[0] === harnessDir()
+      )
+    ) ||
+    parts.some((part) => SOURCE_FINGERPRINT_HARD_EXCLUDED_DIRS.has(part)) ||
+    isAidlcSensorCachePath(path)
+  );
+}
+
+function isAidlcSensorCachePath(path: string): boolean {
+  const parts = path.split("/");
+  for (let i = 0; i + 4 < parts.length; i++) {
+    if (
+      parts[i] === "aidlc" &&
+      parts[i + 1] === "spaces" &&
+      parts[i + 3] === "intents" &&
+      parts.slice(i + 4).includes(".aidlc-sensors")
+    ) {
+      return true;
+    }
+  }
+  return false;
+}
+
+function stableFileSha256(path: string): string | null {
+  let fd: number | undefined;
+  try {
+    fd = openSync(path, "r");
+    const before = fstatSync(fd);
+    if (!before.isFile()) return null;
+    const hash = createHash("sha256");
+    const buffer = Buffer.allocUnsafe(64 * 1024);
+    let position = 0;
+    while (true) {
+      const count = readSync(fd, buffer, 0, buffer.length, position);
+      if (count === 0) break;
+      hash.update(buffer.subarray(0, count));
+      position += count;
+    }
+    const after = fstatSync(fd);
+    if (
+      before.size !== after.size ||
+      before.mtimeMs !== after.mtimeMs ||
+      before.ctimeMs !== after.ctimeMs ||
+      position !== after.size
+    ) {
+      return null;
+    }
+    return hash.digest("hex");
+  } catch {
+    return null;
+  } finally {
+    if (fd !== undefined) {
+      try {
+        closeSync(fd);
+      } catch {
+        // The fingerprint already fails closed on any earlier read error.
+      }
+    }
+  }
+}
+
+interface FilesystemSourceIdentity {
+  embeddedGitPaths: string[];
+  excludedSymlinkPathspecs: string[];
+  fingerprint: string;
+  registeredSnapshotPaths: string[];
+  snapshotPaths: string[];
+}
+
+function filesystemSourceIdentity(
+  root: string,
+  carriesWorkspaceShell: boolean,
+  excludedTopLevel: ReadonlySet<string> = new Set(),
+): FilesystemSourceIdentity | null {
+  const maxEntries = sourceIdentityBudget(
+    "AIDLC_TEST_SOURCE_MAX_ENTRIES",
+    250_000,
+  );
+  const maxDirectories = sourceIdentityBudget(
+    "AIDLC_TEST_SOURCE_MAX_DIRECTORIES",
+    100_000,
+  );
+  const maxSymlinks = sourceIdentityBudget(
+    "AIDLC_TEST_SOURCE_MAX_SYMLINKS",
+    100_000,
+  );
+  const maxFiles = 250_000;
+  const maxBytes = 4 * 1024 * 1024 * 1024;
+  const sourceOnlyMaxFiles = 10_000;
+  const sourceOnlyMaxBytes = 64 * 1024 * 1024;
+  const sourceExtension =
+    /\.(?:astro|c|cc|cmake|cpp|cs|css|dart|erl|ex|exs|go|gql|graphql|h|hcl|hpp|hrl|html|java|js|jsx|json|kt|kts|lua|m|mm|php|proto|ps1|psd1|psm1|py|r|rb|rs|scala|sh|sol|sql|svelte|swift|tf|tfvars|toml|ts|tsx|vue|xml|ya?ml|zig)$/i;
+  const sourceBasename =
+    /^(?:BUILD|CMakeLists\.txt|Dockerfile(?:\..+)?|Gemfile|Justfile|Makefile|Procfile|Tiltfile|WORKSPACE)$/i;
+  const lines: string[] = [];
+  const embeddedGitPaths = new Set<string>();
+  const excludedSymlinkPathspecs = new Set<string>();
+  const registeredSnapshotPaths = new Set<string>();
+  const snapshotPaths = new Set<string>();
+  const visited = new Map<string, boolean>();
+  const active = new Set<string>();
+  let entriesSeen = 0;
+  let directoriesSeen = 0;
+  let symlinksSeen = 0;
+  let totalFiles = 0;
+  let totalBytes = 0;
+  let sourceOnlyFiles = 0;
+  let sourceOnlyBytes = 0;
+  let rootReal: string;
+  try {
+    rootReal = realpathSync(root);
+  } catch {
+    return null;
+  }
+  const registeredSources = sourceFingerprintRegistryPaths(
+    rootReal,
+    carriesWorkspaceShell,
+  );
+  if (registeredSources === null) return null;
+  for (const logicalPath of registeredSources) {
+    const parts = logicalPath.split("/");
+    for (let i = parts.length; i >= 0; i--) {
+      const existingPrefix = join(rootReal, ...parts.slice(0, i));
+      let resolvedPrefix: string;
+      try {
+        resolvedPrefix = realpathSync(existingPrefix);
+      } catch {
+        continue;
+      }
+      const physicalPath = join(resolvedPrefix, ...parts.slice(i));
+      const physicalRel = relative(rootReal, physicalPath);
+      if (
+        physicalRel !== "" &&
+        !isAbsolute(physicalRel) &&
+        physicalRel !== ".." &&
+        !physicalRel.startsWith(`..${sep}`)
+      ) {
+        const physicalPosix = physicalRel.split(sep).join("/");
+        if (
+          sourcePathPhysicallyExcluded(
+            physicalPosix,
+            carriesWorkspaceShell,
+          )
+        ) {
+          return null;
+        }
+        registeredSnapshotPaths.add(physicalPosix);
+      }
+      break;
+    }
+  }
+  const registeredList = [...registeredSources].sort();
+  const registeredPathIncludes = (rel: string): boolean => {
+    if (registeredSources.has(rel)) return true;
+    let slash = rel.lastIndexOf("/");
+    while (slash !== -1) {
+      if (registeredSources.has(rel.slice(0, slash))) return true;
+      slash = rel.lastIndexOf("/", slash - 1);
+    }
+    return false;
+  };
+  const registeredDescendantExists = (rel: string): boolean => {
+    const prefix = `${rel}/`;
+    let low = 0;
+    let high = registeredList.length;
+    while (low < high) {
+      const mid = Math.floor((low + high) / 2);
+      if (registeredList[mid] < prefix) low = mid + 1;
+      else high = mid;
+    }
+    return registeredList[low]?.startsWith(prefix) ?? false;
+  };
+  const registeredPathRelevant = (rel: string): boolean =>
+    registeredPathIncludes(rel) || registeredDescendantExists(rel);
+  const textLike = (path: string, size: number): boolean => {
+    if (size === 0) return true;
+    let fd: number | undefined;
+    try {
+      fd = openSync(path, "r");
+      const sample = Buffer.alloc(Math.min(size, 8192));
+      const count = readSync(fd, sample, 0, sample.byteLength, 0);
+      return !sample.subarray(0, count).includes(0);
+    } catch {
+      return false;
+    } finally {
+      if (fd !== undefined) {
+        try {
+          closeSync(fd);
+        } catch {
+          // The later full read remains fail-closed.
+        }
+      }
+    }
+  };
+  const hasShebang = (path: string, size: number): boolean => {
+    if (size < 2) return false;
+    let fd: number | undefined;
+    try {
+      fd = openSync(path, "r");
+      const sample = Buffer.alloc(2);
+      return readSync(fd, sample, 0, 2, 0) === 2 &&
+        sample[0] === 0x23 &&
+        sample[1] === 0x21;
+    } catch {
+      return false;
+    } finally {
+      if (fd !== undefined) {
+        try {
+          closeSync(fd);
+        } catch {
+          // The later full read remains fail-closed.
+        }
+      }
+    }
+  };
+  const snapshotCandidate = (
+    path: string,
+    rel: string,
+    name: string,
+    size: number,
+  ): boolean =>
+    registeredPathIncludes(rel) ||
+    sourceExtension.test(name) ||
+    sourceBasename.test(name) ||
+    hasShebang(path, size);
+  const recordFile = (
+    path: string,
+    rel: string,
+    size: number,
+    executable: boolean,
+    sourceOnly: boolean,
+  ): boolean => {
+    totalFiles += 1;
+    totalBytes += size;
+    if (totalFiles > maxFiles || totalBytes > maxBytes) return false;
+    if (sourceOnly) {
+      sourceOnlyFiles += 1;
+      sourceOnlyBytes += size;
+      if (
+        sourceOnlyFiles > sourceOnlyMaxFiles ||
+        sourceOnlyBytes > sourceOnlyMaxBytes
+      ) {
+        return false;
+      }
+    }
+    const sha = stableFileSha256(path);
+    if (sha === null) return false;
+    lines.push(`file:${rel}:${executable ? "x" : "-"}=${sha}`);
+    return true;
+  };
+  const walk = (
+    dir: string,
+    rel = "",
+    sourceOnly = false,
+    registeredOnly = false,
+    snapshotEligible = true,
+    registryRel = rel,
+    snapshotRel = rel,
+  ): boolean => {
+    let real: string;
+    try {
+      real = realpathSync(dir);
+    } catch {
+      return false;
+    }
+    if (active.has(real)) return true;
+    const identityMode = registeredOnly
+      ? `registered:${registryRel}`
+      : sourceOnly
+        ? "source-only"
+        : "full";
+    const visitKey = `${real}\0${identityMode}`;
+    const priorSnapshotEligibility = visited.get(visitKey);
+    if (
+      priorSnapshotEligibility === true ||
+      (priorSnapshotEligibility === false && !snapshotEligible)
+    ) {
+      return true;
+    }
+    const recordIdentity = priorSnapshotEligibility === undefined;
+    visited.set(
+      visitKey,
+      (priorSnapshotEligibility ?? false) || snapshotEligible,
+    );
+    active.add(real);
+    try {
+      directoriesSeen += 1;
+      if (directoriesSeen > maxDirectories) return false;
+      const entries: import("node:fs").Dirent[] = [];
+      let handle: ReturnType<typeof opendirSync> | undefined;
+      try {
+        handle = opendirSync(dir);
+        while (true) {
+          const entry = handle.readSync();
+          if (entry === null) break;
+          entriesSeen += 1;
+          if (entriesSeen > maxEntries) return false;
+          entries.push(entry);
+        }
+      } catch {
+        return false;
+      } finally {
+        if (handle !== undefined) {
+          try {
+            handle.closeSync();
+          } catch {
+            // The read path already fails closed.
+          }
+        }
+      }
+      entries.sort((a, b) =>
+        a.name < b.name ? -1 : a.name > b.name ? 1 : 0
+      );
+      for (const entry of entries) {
+        const childRel = rel ? `${rel}/${entry.name}` : entry.name;
+        const childRegistryRel = registryRel
+          ? `${registryRel}/${entry.name}`
+          : entry.name;
+        const childSnapshotRel = snapshotRel
+          ? `${snapshotRel}/${entry.name}`
+          : entry.name;
+        if (entry.isSymbolicLink()) {
+          symlinksSeen += 1;
+          if (symlinksSeen > maxSymlinks) return false;
+        }
+        if (
+          registeredOnly &&
+          !registeredPathRelevant(childRegistryRel)
+        ) {
+          continue;
+        }
+        if (
+          rel === "" &&
+          excludedTopLevel.has(entry.name) &&
+          !registeredPathRelevant(childRegistryRel)
+        ) {
+          continue;
+        }
+        if (entry.name === ".git") {
+          if (entry.isSymbolicLink()) {
+            excludedSymlinkPathspecs.add(`:(top,literal)${childSnapshotRel}`);
+          }
+          continue;
+        }
+        if (
+          (entry.isDirectory() || entry.isSymbolicLink()) &&
+          SOURCE_FINGERPRINT_HARD_EXCLUDED_DIRS.has(entry.name)
+        ) {
+          if (entry.isSymbolicLink()) {
+            excludedSymlinkPathspecs.add(`:(top,literal)${childSnapshotRel}`);
+          }
+          continue;
+        }
+        if (
+          rel === "" &&
+          carriesWorkspaceShell &&
+          (entry.isDirectory() || entry.isSymbolicLink()) &&
+          (
+            entry.name === "aidlc" ||
+            entry.name === ".aidlc" ||
+            entry.name === harnessDir()
+          )
+        ) {
+          if (entry.isSymbolicLink()) {
+            excludedSymlinkPathspecs.add(`:(top,literal)${childSnapshotRel}`);
+          }
+          continue;
+        }
+        if (
+          (entry.isDirectory() || entry.isSymbolicLink()) &&
+          isAidlcSensorCachePath(childRel)
+        ) {
+          if (entry.isSymbolicLink()) {
+            excludedSymlinkPathspecs.add(`:(top,literal)${childSnapshotRel}`);
+          }
+          continue;
+        }
+        const conditionalBoundary =
+          (entry.isDirectory() || entry.isSymbolicLink()) &&
+          SOURCE_FINGERPRINT_CONDITIONAL_DIRS.has(entry.name);
+        if (
+          conditionalBoundary &&
+          !registeredPathRelevant(childRegistryRel)
+        ) {
+          if (entry.isSymbolicLink()) {
+            excludedSymlinkPathspecs.add(`:(top,literal)${childSnapshotRel}`);
+          }
+          continue;
+        }
+        const childRegisteredOnly =
+          registeredOnly || conditionalBoundary;
+        const child = join(dir, entry.name);
+        let stat: ReturnType<typeof lstatSync>;
+        try {
+          stat = lstatSync(child);
+        } catch {
+          return false;
+        }
+        if (stat.isSymbolicLink()) {
+          let linkText: string;
+          try {
+            linkText = readlinkSync(child);
+          } catch {
+            return false;
+          }
+          if (recordIdentity) lines.push(`link:${childRel}=${linkText}`);
+          if (snapshotEligible) snapshotPaths.add(childSnapshotRel);
+          let target: string;
+          try {
+            target = realpathSync(child);
+          } catch {
+            if (recordIdentity) {
+              lines.push(`link-target:${childRel}=missing`);
+            }
+            continue;
+          }
+          let targetStat: ReturnType<typeof statSync>;
+          try {
+            targetStat = statSync(target);
+          } catch {
+            return false;
+          }
+          if (targetStat.isFile()) {
+            if (
+              childRegisteredOnly &&
+              !registeredPathIncludes(childRegistryRel)
+            ) {
+              continue;
+            }
+            if (
+              sourceOnly &&
+              !childRegisteredOnly &&
+              !sourceExtension.test(entry.name) &&
+              !sourceBasename.test(entry.name) &&
+              !textLike(target, targetStat.size)
+            ) {
+              continue;
+            }
+            if (
+              recordIdentity &&
+              !recordFile(
+                target,
+                `${childRel}@target`,
+                targetStat.size,
+                (targetStat.mode & 0o111) !== 0,
+                sourceOnly,
+              )
+            ) {
+              return false;
+            }
+          } else if (targetStat.isDirectory()) {
+            const targetRelNative = relative(rootReal, target);
+            const internal =
+              targetRelNative === "" ||
+              (
+                !isAbsolute(targetRelNative) &&
+                targetRelNative !== ".." &&
+                !targetRelNative.startsWith(`..${sep}`)
+              );
+            const targetSnapshotRel = internal
+              ? targetRelNative.split(sep).join("/")
+              : childSnapshotRel;
+            const targetSnapshotEligible =
+              snapshotEligible &&
+              internal &&
+              !existsSync(join(target, ".git"));
+            if (
+              !walk(
+                target,
+                `${childRel}@target`,
+                sourceOnly || !internal,
+                childRegisteredOnly,
+                targetSnapshotEligible,
+                childRegistryRel,
+                targetSnapshotRel,
+              )
+            ) {
+              return false;
+            }
+          } else if (recordIdentity) {
+            lines.push(
+              `link-target:${childRel}=special:${targetStat.mode}`,
+            );
+          }
+          continue;
+        }
+        if (stat.isDirectory()) {
+          if (conditionalBoundary) {
+            if (
+              !walk(
+                child,
+                childRel,
+                false,
+                true,
+                snapshotEligible,
+                childRegistryRel,
+                childSnapshotRel,
+              )
+            ) {
+              return false;
+            }
+            continue;
+        }
+        const nestedGitRepo = existsSync(join(child, ".git"));
+        if (nestedGitRepo && snapshotEligible) {
+          embeddedGitPaths.add(childSnapshotRel);
+          snapshotPaths.add(childSnapshotRel);
+        }
+        if (
+          !walk(
+              child,
+              childRel,
+              sourceOnly,
+              registeredOnly,
+              snapshotEligible && !nestedGitRepo,
+              childRegistryRel,
+              childSnapshotRel,
+            )
+          ) {
+            return false;
+          }
+          continue;
+        }
+        if (stat.isFile()) {
+          if (
+            sourceOnly &&
+            !childRegisteredOnly &&
+            !sourceExtension.test(entry.name) &&
+            !sourceBasename.test(entry.name) &&
+            !textLike(child, stat.size)
+          ) {
+            continue;
+          }
+          if (
+            childRegisteredOnly &&
+            !registeredPathIncludes(childRegistryRel)
+          ) {
+            continue;
+          }
+          if (
+            recordIdentity &&
+            !recordFile(
+              child,
+              childRel,
+              stat.size,
+              (stat.mode & 0o111) !== 0,
+              sourceOnly,
+            )
+          ) {
+            return false;
+          }
+          if (
+            snapshotEligible &&
+            snapshotCandidate(
+              child,
+              childRegistryRel,
+              entry.name,
+              stat.size,
+            )
+          ) {
+            snapshotPaths.add(childSnapshotRel);
+          }
+          continue;
+        }
+        if (recordIdentity) {
+          lines.push(`special:${childRel}:${stat.mode}`);
+        }
+      }
+      return true;
+    } finally {
+      active.delete(real);
+    }
+  };
+  if (!walk(rootReal)) return null;
+  return {
+    embeddedGitPaths: [...embeddedGitPaths].sort(),
+    excludedSymlinkPathspecs: [...excludedSymlinkPathspecs].sort(),
+    fingerprint: createHash("sha256")
+      .update(["aidlc-filesystem-source-v2", ...lines].join("\n"))
+      .digest("hex"),
+    registeredSnapshotPaths: [...registeredSnapshotPaths].sort(),
+    snapshotPaths: [...snapshotPaths].sort(),
+  };
+}
+
+function multiRepoRoofExcludedTopLevel(
+  projectDir: string,
+  repos: readonly string[],
+): Set<string> | null {
+  const excluded = new Set(repos);
+  const maxEntries = sourceIdentityBudget(
+    "AIDLC_TEST_SOURCE_MAX_ENTRIES",
+    250_000,
+  );
+  let handle: ReturnType<typeof opendirSync> | undefined;
+  try {
+    handle = opendirSync(projectDir);
+    let entriesSeen = 0;
+    while (true) {
+      const entry = handle.readSync();
+      if (entry === null) break;
+      entriesSeen += 1;
+      if (entriesSeen > maxEntries) return null;
+      if (entry.isDirectory()) {
+        excluded.add(entry.name);
+        continue;
+      }
+      if (!entry.isSymbolicLink()) continue;
+      try {
+        if (statSync(join(projectDir, entry.name)).isDirectory()) {
+          excluded.add(entry.name);
+        }
+      } catch {
+        // A broken roof symlink is fingerprinted as a roof file unless the
+        // source registry or another explicit boundary says otherwise.
+      }
+    }
+  } catch {
+    return null;
+  } finally {
+    if (handle !== undefined) {
+      try {
+        handle.closeSync();
+      } catch {
+        // The bounded read path already fails closed.
+      }
+    }
+  }
+  return excluded;
+}
+
+export function workspaceSourceSnapshotPaths(
+  projectDir: string,
+  carriesWorkspaceShell = false,
+): string[] | null {
+  return (
+    filesystemSourceIdentity(projectDir, carriesWorkspaceShell)
+      ?.snapshotPaths ?? null
+  );
+}
+
+export function workspaceSourceEmbeddedGitPaths(
+  projectDir: string,
+  carriesWorkspaceShell = false,
+): string[] | null {
+  return (
+    filesystemSourceIdentity(projectDir, carriesWorkspaceShell)
+      ?.embeddedGitPaths ?? null
+  );
+}
+
 export function workspaceSourceFingerprint(projectDir: string): string | null {
   const repos = intentRepos(projectDir);
   // No recorded repos: projectDir IS the checkout (legacy single-repo, or a Bolt
   // worktree - see aidlc-swarm.ts finalize) and carries the shell at its top.
-  if (repos.length === 0) return gitTreeFingerprint(projectDir, true);
+  if (repos.length === 0) {
+    const source = filesystemSourceIdentity(projectDir, true);
+    if (source === null) return null;
+    return createHash("sha256")
+      .update(
+        [
+          "aidlc-workspace-source-v2",
+          `filesystem=${source.fingerprint}`,
+        ].join("\n"),
+      )
+      .digest("hex");
+  }
   const lines: string[] = [];
+  const roofExcluded = multiRepoRoofExcludedTopLevel(projectDir, repos);
+  if (roofExcluded === null) return null;
+  const roof = filesystemSourceIdentity(projectDir, true, roofExcluded);
+  if (roof === null) return null;
+  lines.push(`roof=filesystem:${roof.fingerprint}`);
   for (const name of [...repos].sort()) {
     // A sibling repo is a child of the roof; the shell is its SIBLING, never
     // nested inside it, so nothing there belongs to the framework.
-    const sha = gitTreeFingerprint(repoDir(projectDir, name), false);
-    if (sha === null) return null;
-    lines.push(`${name}=${sha}`);
+    const dir = repoDir(projectDir, name);
+    if (!existsSync(dir)) {
+      lines.push(`${name}=missing`);
+      continue;
+    }
+    const source = filesystemSourceIdentity(dir, false);
+    if (source === null) return null;
+    lines.push(`${name}=filesystem:${source.fingerprint}`);
   }
-  return createHash("sha256").update(lines.join("\n")).digest("hex");
+  return createHash("sha256")
+    .update(["aidlc-workspace-source-v2", ...lines].join("\n"))
+    .digest("hex");
 }
 
 
