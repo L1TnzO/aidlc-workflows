@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.71] - 2026-08-24
+
+`/aidlc --doctor` now distinguishes hook directories that have not had a chance to populate from dead hook seams after a workflow stage ran. **Upgrade:** refresh your `dist/<harness>/` shell so doctor can detect this condition.
+
+* When `.aidlc-hooks-health/` exists without any `.last` files and the active audit ledger contains `STAGE_STARTED`, doctor reports `Hook heartbeat data` and exits 1; CI jobs that gate on doctor will now fail for this broken hook state.
+* Missing, pre-created, and debug-only health directories still report the existing not-yet-fired pass row before any stage starts, while real heartbeat files continue to report their last-fired timestamps.
+
 ## [2.6.70] - 2026-08-24
 
 Bugfix and refactor workflows now carry verified changes through the existing deployment path instead of stopping after Build and Test. **Upgrade:** refresh your `dist/<harness>/` shell to pick up the expanded scope grids, deployment fallback, and skip-provenance fix.
