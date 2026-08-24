@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.72] - 2026-08-24
+
+Kind-vacuous Construction units no longer deadlock summary-confirmation routing when their unit kind excludes every output of a per-unit stage. **Upgrade:** refresh your `dist/<harness>/` shell so unit-major routing and per-unit approval skip confirmation evidence that an inapplicable unit cannot produce.
+
+* Unit-major iteration now advances past kind-vacuous units to the next applicable stage and unit instead of emitting `Refusing to complete`.
+* Stage-major per-unit approval now presents the normal gate when all units are kind-vacuous, without requiring nonexistent questions or summary confirmation.
+
 ## [2.6.70] - 2026-08-24
 
 Bugfix and refactor workflows now carry verified changes through the existing deployment path instead of stopping after Build and Test. **Upgrade:** refresh your `dist/<harness>/` shell to pick up the expanded scope grids, deployment fallback, and skip-provenance fix.
