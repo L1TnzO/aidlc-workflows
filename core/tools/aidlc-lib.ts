@@ -1658,6 +1658,43 @@ export function codekbScopeFingerprint(
   }
 }
 
+// True only when the durable CodeKB store for `repo` carries a valid scope
+// block whose recorded fingerprint still matches the current source tree.
+// This is the programmatic form of `codekb-scope-diff`'s CURRENT verdict, used
+// by authority-bearing reuse receipts so freshness is checked both when the
+// receipt is minted and when pipeline completion consumes it.
+export function codekbStoreIsCurrent(
+  projectDir: string,
+  requestedRepo?: string,
+  space?: string,
+): boolean {
+  const sp = space ?? activeSpace(projectDir);
+  const repo = requestedRepo ?? codekbRepoName(projectDir, sp);
+  const timestamp = join(
+    codekbDir(projectDir, repo, sp),
+    "reverse-engineering-timestamp.md",
+  );
+  if (!existsSync(timestamp)) return false;
+  let parsed: ReScopeParse;
+  try {
+    parsed = parseReScope(readFileSync(timestamp, "utf-8"));
+  } catch {
+    return false;
+  }
+  if (!parsed.ok || parsed.scope.fingerprint === null) return false;
+  const sibling = repoDir(projectDir, repo);
+  const sourceRoot =
+    existsSync(sibling) && statSync(sibling).isDirectory()
+      ? sibling
+      : projectDir;
+  const current = codekbScopeFingerprint(
+    sourceRoot,
+    parsed.scope.analyzedPaths,
+    sourceRoot === projectDir ? ["aidlc"] : [],
+  );
+  return current !== null && current === parsed.scope.fingerprint;
+}
+
 // Coverage test for the compare mode: does the incoming run's analyzed set
 // cover a store entry? Literal match, or an incoming DIRECTORY prefix (entry
 // ending "/") subsuming the store path. Deliberately prefix-only - scope
@@ -8351,6 +8388,9 @@ export interface PipelineLinkReceipt {
   repo: string | null;
   position: string | null;
   timestamp: string;
+  artifactPath: string | null;
+  artifactSha256: string | null;
+  artifactMtimeMs: number | null;
 }
 
 export interface PipelineLinkEvidence {
@@ -8441,6 +8481,37 @@ function pipelineAttemptFloor(
   return floor;
 }
 
+export function pipelineAttemptStartedAt(
+  projectDir: string,
+  stageSlug: string,
+  options: { singleRun?: boolean } = {},
+): string {
+  const events = orderedPipelineEvidenceEvents(projectDir);
+  const floor = pipelineAttemptFloor(
+    events,
+    stageSlug,
+    options.singleRun === true,
+  );
+  return floor >= 0 ? events[floor].timestamp : "";
+}
+
+export function singleStageAttemptIsOpen(
+  projectDir: string,
+  stageSlug: string,
+): boolean {
+  const workflow = `single-stage:${stageSlug}`;
+  const events = orderedPipelineEvidenceEvents(projectDir)
+    .filter((entry) =>
+      (
+        entry.event === "STAGE_STARTED" ||
+        entry.event === "STAGE_COMPLETED"
+      ) &&
+      auditBlockField(entry.block, "Stage") === stageSlug &&
+      auditBlockField(entry.block, "Workflow") === workflow
+    );
+  return events.at(-1)?.event === "STAGE_STARTED";
+}
+
 // Current-attempt pipeline receipts are scoped to either the main workflow or
 // one isolated `--single` stream. A later matching STAGE_STARTED resets that
 // scope; rows from the other scope never participate in order or duplicate
@@ -8476,37 +8547,124 @@ export function currentPipelineLinkReceipts(
       repo: auditBlockField(entry.block, "Repo"),
       position: auditBlockField(entry.block, "Position"),
       timestamp: entry.timestamp,
+      artifactPath: auditBlockField(entry.block, "Artifact Path"),
+      artifactSha256: auditBlockField(entry.block, "Artifact SHA256"),
+      artifactMtimeMs: (() => {
+        const value = auditBlockField(entry.block, "Artifact Mtime Ms");
+        return value && /^[0-9]+(?:\.[0-9]+)?$/.test(value)
+          ? Number(value)
+          : null;
+      })(),
     });
   }
   return receipts;
 }
 
-function currentPipelineReusedRepos(
+export function latestPipelineLinkArtifactMtime(
   projectDir: string,
   stageSlug: string,
-): string[] {
+  link: string,
+  repo: string | null,
+  options: { singleRun?: boolean } = {},
+): number | null {
+  const workflow = `single-stage:${stageSlug}`;
+  const singleRun = options.singleRun === true;
+  let latest: number | null = null;
+  for (const entry of orderedPipelineEvidenceEvents(projectDir)) {
+    const eventWorkflow = auditBlockField(entry.block, "Workflow");
+    if (
+      entry.event !== "PIPELINE_LINK_COMPLETED" ||
+      auditBlockField(entry.block, "Stage") !== stageSlug ||
+      auditBlockField(entry.block, "Link") !== link ||
+      auditBlockField(entry.block, "Repo") !== repo ||
+      (
+        singleRun
+          ? eventWorkflow !== workflow
+          : eventWorkflow?.startsWith("single-stage:") === true
+      )
+    ) {
+      continue;
+    }
+    const value = auditBlockField(entry.block, "Artifact Mtime Ms");
+    if (!value || !/^[0-9]+(?:\.[0-9]+)?$/.test(value)) continue;
+    latest = Number(value);
+  }
+  return latest;
+}
+
+function pipelineReceiptArtifactIsCurrent(
+  projectDir: string,
+  stage: Pick<StageEntry, "slug" | "lead_agent">,
+  receipt: PipelineLinkReceipt,
+): boolean {
+  if (
+    stage.slug !== "reverse-engineering" ||
+    receipt.link !== stage.lead_agent
+  ) {
+    return true;
+  }
+  if (
+    !receipt.artifactPath ||
+    !receipt.artifactSha256 ||
+    receipt.artifactMtimeMs === null ||
+    !/^sha256:[0-9a-f]{64}$/.test(receipt.artifactSha256)
+  ) {
+    return false;
+  }
+  const root = recordDir(projectDir);
+  if (root === null) return false;
+  const path = resolvePath(projectDir, receipt.artifactPath);
+  if (path !== root && !path.startsWith(`${root}${sep}`)) return false;
+  try {
+    const stat = statSync(path);
+    if (
+      !stat.isFile() ||
+      Math.abs(stat.mtimeMs - receipt.artifactMtimeMs) > 0.01
+    ) {
+      return false;
+    }
+    const digest = createHash("sha256")
+      .update(readFileSync(path))
+      .digest("hex");
+    return receipt.artifactSha256 === `sha256:${digest}`;
+  } catch {
+    return false;
+  }
+}
+
+function currentPipelineReuseEvidence(
+  projectDir: string,
+  stageSlug: string,
+  singleRun: boolean,
+): Set<string | null> {
   const events = orderedPipelineEvidenceEvents(projectDir);
-  const floor = pipelineAttemptFloor(events, stageSlug, false);
-  const reused = new Set<string>();
+  const floor = pipelineAttemptFloor(events, stageSlug, singleRun);
+  const workflow = `single-stage:${stageSlug}`;
+  const reused = new Set<string | null>();
   for (let i = floor + 1; i < events.length; i++) {
     const entry = events[i];
+    const eventWorkflow = auditBlockField(entry.block, "Workflow");
     if (
       entry.event !== "ARTIFACT_REUSED" ||
       auditBlockField(entry.block, "Stage") !== stageSlug ||
       auditBlockField(entry.block, "Decision") !== "keep" ||
-      auditBlockField(entry.block, "Workflow")?.startsWith("single-stage:")
+      (
+        singleRun
+          ? eventWorkflow !== workflow
+          : eventWorkflow?.startsWith("single-stage:") === true
+      )
     ) {
       continue;
     }
-    const repo = auditBlockField(entry.block, "Repo");
-    if (repo) reused.add(repo);
+    reused.add(auditBlockField(entry.block, "Repo"));
   }
-  return [...reused];
+  return reused;
 }
 
-// Registered multi-repo intents run one independent receipt chain per repo.
-// A current-attempt per-repo reuse row satisfies that repo without dispatch.
-// Single/unrecorded intents retain one chain and may omit Repo on every row.
+// Every recorded repo identity runs one independent, repo-qualified receipt
+// chain, including an intent with exactly one registered repo. A current-attempt
+// per-repo reuse row satisfies that repo without dispatch. Only an unrecorded
+// project-root repo uses the null/unqualified chain.
 export function pipelineLinkEvidence(
   projectDir: string,
   stage: Pick<StageEntry, "slug" | "lead_agent" | "support_agents">,
@@ -8514,17 +8672,49 @@ export function pipelineLinkEvidence(
 ): PipelineLinkEvidence {
   const links = pipelineLinks(stage);
   const registeredRepos = intentRepos(projectDir);
-  const repos = registeredRepos.length > 1 ? registeredRepos : [];
+  const repos = registeredRepos;
   const singleRun = options.singleRun === true;
-  const receipts = currentPipelineLinkReceipts(
+  const rawReceipts = currentPipelineLinkReceipts(
     projectDir,
     stage.slug,
     { singleRun },
   );
-  const reusedRepos = singleRun
-    ? []
-    : currentPipelineReusedRepos(projectDir, stage.slug)
-      .filter((repo) => repos.includes(repo));
+  const receipts: PipelineLinkReceipt[] = [];
+  const chainRepos = repos.length > 0 ? repos : [null];
+  for (const repo of chainRepos) {
+    const chain: PipelineLinkReceipt[] = [];
+    for (const receipt of rawReceipts) {
+      if (receipt.repo !== repo) continue;
+      if (receipt.link === links[0]) {
+        chain.length = 0;
+        if (pipelineReceiptArtifactIsCurrent(projectDir, stage, receipt)) {
+          chain.push(receipt);
+        }
+        continue;
+      }
+      if (
+        chain.length > 0 &&
+        chain.length < links.length &&
+        receipt.link === links[chain.length]
+      ) {
+        chain.push(receipt);
+      }
+    }
+    receipts.push(...chain);
+  }
+  const reuseEvidence = currentPipelineReuseEvidence(
+    projectDir,
+    stage.slug,
+    singleRun,
+  );
+  const reusedRepos = repos.filter((repo) =>
+    reuseEvidence.has(repo) &&
+    (!singleRun || codekbStoreIsCurrent(projectDir, repo))
+  );
+  const unrecordedRepoReused =
+    repos.length === 0 &&
+    reuseEvidence.has(null) &&
+    (!singleRun || codekbStoreIsCurrent(projectDir));
   const missing: Array<{ link: string; repo: string | null }> = [];
 
   if (repos.length > 0) {
@@ -8539,16 +8729,18 @@ export function pipelineLinkEvidence(
       }
     }
   } else {
-    for (const link of links) {
-      if (!receipts.some((receipt) => receipt.link === link)) {
-        missing.push({ link, repo: null });
+    if (!unrecordedRepoReused) {
+      for (const link of links) {
+        if (!receipts.some((receipt) => receipt.link === link)) {
+          missing.push({ link, repo: null });
+        }
       }
     }
   }
 
-  // The directive keeps the compact link-name form for a single chain. A
-  // multi-repo stage qualifies each completed entry so resume can distinguish
-  // independent chains without adding another wire field.
+  // Recorded repo identities qualify every completed entry so the handoff,
+  // receipt, codekb destination, and resume lookup all use the same key. Only
+  // an unrecorded project-root repo keeps the compact link-name form.
   const completed = repos.length > 0
     ? repos.flatMap((repo) =>
         reusedRepos.includes(repo)
@@ -8561,9 +8753,11 @@ export function pipelineLinkEvidence(
             )
             .map((link) => `${repo}:${link}`)
       )
-    : links.filter((link) =>
-        receipts.some((receipt) => receipt.link === link)
-      );
+    : unrecordedRepoReused
+      ? [...links]
+      : links.filter((link) =>
+          receipts.some((receipt) => receipt.link === link)
+        );
 
   return { links, repos, receipts, reusedRepos, completed, missing };
 }

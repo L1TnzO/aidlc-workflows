@@ -14,6 +14,7 @@ import {
   checkSummaryConfirmationEvidence,
   codekbDir,
   codekbRepoName,
+  codekbStoreIsCurrent,
   countCheckboxes,
   emitError,
   errorMessage,
@@ -51,6 +52,7 @@ import {
   readAllAuditShards,
   readStateFile,
   recordDir,
+  relativeCodekbDir,
   relativeMemoryPath,
   relativeRecordDir,
   removeField,
@@ -68,6 +70,7 @@ import {
   setFieldStrict,
   setOrInsertField,
   setPhaseProgress,
+  singleStageAttemptIsOpen,
   stagesInScope,
   swarmConvergedUnits,
   updateIntentStatus,
@@ -81,6 +84,7 @@ import {
   writeFileAtomic,
 } from "./aidlc-lib.js";
 import { memoryDirFor } from "./aidlc-graph.ts";
+import { inspectRequiredArtifactInstances } from "./aidlc-artifact-resolution.ts";
 import { compiledExecutable } from "./aidlc-runtime-paths.ts";
 import {
   stageValidationAuditFields,
@@ -3877,15 +3881,16 @@ function handlePracticesPromote(args: string[]): void {
 }
 
 // reuse-artifact <slug> --decision <keep|modify|redo> --artifacts <csv>
-//   [--repo <repo>]
+//   [--repo <repo>] [--single]
 function handleReuseArtifact(args: string[]): void {
   if (args.length < 1)
-    error("Usage: aidlc-state.ts reuse-artifact <slug> --decision <keep|modify|redo> --artifacts <csv> [--repo <repo>]");
+    error("Usage: aidlc-state.ts reuse-artifact <slug> --decision <keep|modify|redo> --artifacts <csv> [--repo <repo>] [--single]");
   const slug = args[0];
   const rest = args.slice(1);
   const decision = getFlagValue(rest, "--decision");
   const artifacts = getFlagValue(rest, "--artifacts");
   const repo = getFlagValue(rest, "--repo");
+  const singleRun = rest.includes("--single");
   if (!decision) error("Missing --decision <keep|modify|redo>");
   if (!artifacts) error("Missing --artifacts <csv>");
 
@@ -3900,6 +3905,58 @@ function handleReuseArtifact(args: string[]): void {
   if (!stage) error(`Unknown stage: ${slug}`);
 
   const pd = resolveProjectDir(projectDir);
+  if (singleRun) {
+    if (!singleStageAttemptIsOpen(pd, slug)) {
+      error(
+        `Cannot record isolated reuse for "${slug}": run next --stage ${slug} --single first.`,
+      );
+    }
+    if (
+      slug === "reverse-engineering" &&
+      decision === "keep"
+    ) {
+      const repos = intentRepos(pd);
+      if (repos.length > 0) {
+        if (!repo) {
+          error(
+            `Cannot record isolated reverse-engineering reuse: this intent records repository identity; pass --repo <repo>.`,
+          );
+        }
+        if (!repos.includes(repo)) {
+          error(
+            `Cannot record isolated reverse-engineering reuse: repo "${repo}" is not registered for this intent (${repos.join(", ")}).`,
+          );
+        }
+      } else if (repo) {
+        error(
+          "Cannot record isolated reverse-engineering reuse: this intent has no registered repo identity; omit --repo.",
+        );
+      }
+      const resolvedRepo = repo ?? codekbRepoName(pd);
+      const expected = `${relativeCodekbDir(pd, resolvedRepo)}/`;
+      if (artifacts.trim().replaceAll("\\", "/") !== expected) {
+        error(
+          `Cannot record isolated reverse-engineering reuse: --artifacts must be the exact current store ${expected}.`,
+        );
+      }
+      if (!codekbStoreIsCurrent(pd, resolvedRepo)) {
+        error(
+          `Cannot record isolated reverse-engineering reuse for "${resolvedRepo}": the CodeKB store is not CURRENT. Rescan it instead.`,
+        );
+      }
+      const artifactInspection = inspectRequiredArtifactInstances(
+        pd,
+        stage,
+        { codekbRepos: [resolvedRepo] },
+      );
+      if (!artifactInspection.ok) {
+        error(
+          `Cannot record isolated reverse-engineering reuse for "${resolvedRepo}": ` +
+            `the required CodeKB artifact set is incomplete or invalid (${artifactInspection.failures.map((failure) => failure.path).join(", ")}). Rescan it instead.`,
+        );
+      }
+    }
+  }
 
   try {
     const fields: Record<string, string> = {
@@ -3908,6 +3965,7 @@ function handleReuseArtifact(args: string[]): void {
       Artifacts: artifacts,
     };
     if (repo) fields.Repo = repo;
+    if (singleRun) fields.Workflow = `single-stage:${slug}`;
     emitAudit(pd, "ARTIFACT_REUSED", fields);
   } catch (e) {
     error(`Audit emission failed: ${errorMessage(e)}`);
@@ -3918,6 +3976,7 @@ function handleReuseArtifact(args: string[]): void {
     decision,
     artifacts,
     ...(repo ? { repo } : {}),
+    ...(singleRun ? { single: true } : {}),
     emitted: "ARTIFACT_REUSED",
   }));
 }

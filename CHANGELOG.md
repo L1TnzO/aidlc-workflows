@@ -1,6 +1,18 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.69] - 2026-08-24
+
+Minimal workflows now avoid unrelated framework knowledge, duplicate conductor source scans, and in-context scan-body handoffs while retaining the same artifacts, reviews, sensors, learnings, and approval gates. **Upgrade:** refresh your `dist/<harness>/` shell so the depth-aware context roster and file-backed Reverse Engineering handoff are installed.
+
+* Minimal Intent Capture and Requirements Analysis load only their stage-relevant shipped knowledge; plugin-installed knowledge, Standard and Comprehensive runs, active-space rules, personas, consumes, and user/team knowledge keep the existing full context.
+* Dispatched agents return path/decision/concern summaries instead of repeating artifact, scan, source, or test-output bodies that already exist on disk.
+* Reverse Engineering keeps its developer-to-architect pipeline and all nine CodeKB artifacts, but transfers the developer scan through a durable record file, binds pipeline receipts to its current-attempt path, write time, and content digest, and prevents a duplicate conductor source scan.
+* Isolated pipeline stage runners now record their synthetic start boundary before the first agent dispatch, require their own receipts before completion, and resume that open attempt without touching the main workflow pointer.
+* Isolated Reverse Engineering reuse now emits synthetic-workflow evidence for all-reuse and mixed-reuse runs only when the complete canonical CodeKB artifact set exists and source freshness matches; missing, redirected, invalid, or later-stale evidence cannot complete.
+* Reverse Engineering keeps every recorded repo identity qualified through its handoff filename, receipt chain, resume evidence, and CodeKB destination, including an intent with exactly one registered repo.
+* Plugin composition records exact recursive knowledge ownership so Minimal context retains active plugin files even when their basename matches excluded core knowledge.
+
 ## [2.6.68] - 2026-08-24
 
 Summary-confirmation receipts now bind to the semantic questions and summary content the human reviewed while allowing the required post-generation assumption section. The contract is versioned, preserves legacy receipt verification, and reports an actionable recovery path for invalidated confirmations. **Upgrade:** refresh your `dist/<harness>/` shell so the scoped receipt, Markdown visibility, and recovery contracts stay aligned.
