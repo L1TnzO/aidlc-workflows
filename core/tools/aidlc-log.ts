@@ -73,7 +73,7 @@ function resolveActiveProjectDir(explicit?: string): string {
   const pd = resolveProjectDir(explicit);
   if (!existsSync(stateFilePath(pd))) {
     error(
-      'No active workflow — refusing to log an interaction event with no resolvable intent. Start a workflow first by describing what to build (/aidlc "build the auth service"), or switch to an intent (/aidlc intent <name>) if several exist.'
+      'No active workflow is selected, so this interaction cannot be recorded. Start one by describing what to build (/aidlc "build the auth service"), or switch to an existing one with /aidlc intent <name>.'
     );
   }
   return pd;
@@ -438,8 +438,8 @@ function handleAnswer(args: string[]): void {
     flags.details !== "Request changes"
   ) {
     error(
-      `Refusing to record summary confirmation: received reply ${formatReceivedReply(flags.details)}: ` +
-        'it did not match an offered choice. Valid choices are "Looks correct" or ' +
+      `Cannot record the summary choice because reply ${formatReceivedReply(flags.details)} ` +
+        'did not match an offered option. Present "Looks correct" and ' +
         '"Request changes". Re-present those choices and wait for the human to choose one.',
     );
   }
@@ -448,9 +448,9 @@ function handleAnswer(args: string[]): void {
   // Some harnesses return a completed-looking object for a dismissed question.
   if (isNonAnswer(flags.details)) {
     error(
-      `Refusing to record received reply ${formatReceivedReply(flags.details)} as an answer: ` +
-        "it is cancellation boilerplate, not a human decision. If the user dismissed the " +
-        "question, re-present it and wait for a real answer; do not log the dismissal.",
+      `Cannot record reply ${formatReceivedReply(flags.details)} because it represents a ` +
+        `dismissed question, not a human answer. Re-present the question and wait for a real ` +
+        `response before trying again.`,
     );
   }
 
@@ -506,12 +506,9 @@ function handleAnswer(args: string[]): void {
         : selfAttributedDecisionMarker(flags.details, "answer");
     if (answerAuthorship) {
       error(
-        `Refusing to record this answer for "${flags.stage}": decision self-attribution blocked ` +
-          `(${answerAuthorship.category}) in --details: "${answerAuthorship.phrase}". ` +
-          "This tripwire detects explicit conductor/model provenance; it does not prove authorship. " +
-          "A stage question is the human's to " +
-          "answer. Re-present it and wait for their reply; recording your own default here would " +
-          "carry it downstream as a human decision.",
+        `Cannot record this answer for "${flags.stage}" because --details says it was ` +
+          `chosen by the assistant (${answerAuthorship.category}: "${answerAuthorship.phrase}"). ` +
+          `This question must be answered by the human. Re-present it and wait for their reply.`,
       );
     }
 
@@ -534,9 +531,9 @@ function handleAnswer(args: string[]): void {
       }
       if (!pending.pending) {
         error(
-          "Refusing to record summary confirmation: no matching unanswered " +
-          "summary-confirmation decision is recorded for this stage, unit, and run. " +
-          "Record the decision before presenting the summary prompt.",
+          "Cannot record the summary choice because no matching unanswered summary question " +
+          "exists for this stage and work item. Record the question before presenting it, then " +
+          "wait for the human's choice.",
         );
       }
       if (
@@ -544,9 +541,9 @@ function handleAnswer(args: string[]): void {
         (!pending.humanAfterDecision || !humanActedSinceLastAnswer(pd))
       ) {
         error(
-          "Refusing to record summary confirmation: a real human has not responded " +
-          "after this summary prompt, or the turn was already consumed by another " +
-          "decision. End the turn, wait for the human's choice, then record it.",
+          "Cannot record the summary choice because no human reply has arrived after this "
+            + "question, or that turn was already used by another decision. End the turn, "
+            + "wait for the human's choice, then try again.",
         );
       }
       try {
@@ -589,7 +586,7 @@ function handleAnswer(args: string[]): void {
         !humanActedSinceLastAnswer(pd)
       ) {
         error(
-          "Refusing to acknowledge this approval choice: a real human has not acted at this gate this turn. The gate is report-owned - after the human types their choice, call aidlc-orchestrate.ts report --result approved or rejected; do not log it as an answer."
+          "Cannot record this approval choice because no new human reply has arrived. After the human types their choice, use aidlc-orchestrate.ts report --result approved or rejected; do not use aidlc-log.ts answer for an approval."
         );
       }
       console.log(
@@ -608,7 +605,7 @@ function handleAnswer(args: string[]): void {
       // scoped test off-switch
     } else if (!humanActedSinceLastAnswer(pd)) {
       error(
-        "Refusing to record this answer: a real human has not acted at this checkpoint this turn. Type your answer in the session (which records a human turn) before logging it."
+        "Cannot record this answer because no new human reply has arrived for the question. Wait for the human to type an answer, then try again."
       );
     }
 
@@ -951,13 +948,11 @@ function reviewAttemptSummary(
 
 function reviewBudgetMessage(stage: string, ordinal: number, budget: number): string {
   return (
-    `Refusing REVIEW_REQUESTED for "${stage}": review request ${ordinal} exceeds ` +
-    `this stage's review budget (${budget}). ` +
+    `Cannot request review pass ${ordinal} for "${stage}" because this stage allows ` +
+    `${budget} review pass${budget === 1 ? "" : "es"}. ` +
     (budget === 1
-      ? "This review runs as a single advisory pass - do not re-invoke the reviewer; " +
-        "quote its findings at the approval gate for the human to triage."
-      : "The review loop is exhausted - present the gate with the unresolved findings " +
-        "for the human's decision instead of another review pass.")
+      ? "Do not ask the reviewer again; include the findings in the approval summary for the human."
+      : "Present the unresolved findings at the approval gate for the human instead of starting another review.")
   );
 }
 
@@ -1002,11 +997,9 @@ function reviewRecoverySpentMessage(
 
 function reviewRecoveryAlreadyRequestedMessage(stage: string, iteration: number): string {
   return (
-    `Refusing REVIEW_REQUESTED for "${stage}": the one stale-receipt recovery ` +
-    "request already exists in this review attempt. If its dispatch is still " +
-    `unmatched, retry iteration ${iteration} with --retry-pending; if its verdict ` +
-    "was recorded, that recovery receipt is terminal and no further review " +
-    "request is allowed."
+    `Cannot request another recovery review for "${stage}" because one already exists ` +
+    `in this review attempt. If the reviewer has not returned, retry iteration ${iteration} ` +
+    "with --retry-pending; if its verdict was recorded, stop and present the approval gate."
   );
 }
 
@@ -1183,7 +1176,7 @@ function handleReview(args: string[]): void {
   // duplicate/missing-label bypasses and makes concurrent requests serialize.
   if (flags.verdict === undefined) {
     if (!flags.iteration || !/^[1-9][0-9]*$/.test(flags.iteration)) {
-      error("REVIEW_REQUESTED requires --iteration <positive integer>.");
+      error("Starting a review requires --iteration <positive integer>.");
     }
     const iteration = Number(flags.iteration);
     fields.Iteration = flags.iteration;
@@ -1236,10 +1229,8 @@ function handleReview(args: string[]): void {
               }
               const unitArg = flags.unit ? ` --unit "${flags.unit}"` : "";
               refuseReview(
-                `Refusing review retry for "${flags.stage}": the prior review ` +
-                  "completed, but its receipt was invalidated by a later artifact write " +
-                  "or workspace source mismatch, so no unmatched request remains. Start " +
-                  "the one recovery " +
+                `Cannot retry the prior review for "${flags.stage}" because it completed ` +
+                  "before the stage output or project source changed. Start the one recovery " +
                   `pass with \`aidlc-log.ts review --stage "${flags.stage}" ` +
                   `--reviewer "${flags.reviewer}"${unitArg} --iteration ${expected}\`.`,
               );
@@ -1253,16 +1244,17 @@ function handleReview(args: string[]): void {
               );
             }
             refuseReview(
-              `Refusing review retry for "${flags.stage}": no unmatched ` +
-                `REVIEW_REQUESTED iteration ${iteration} exists in the current audit attempt.`,
+              `Cannot retry review iteration ${iteration} for "${flags.stage}" because no ` +
+                `pending request with that number exists. Start the expected review pass instead.`,
             );
           }
           fields.Retry = "pending-request";
           const fingerprint = reviewArtifactFingerprint(pd, node, flags.unit);
           if (fingerprint === null) {
             refuseReview(
-              `Cannot record review for "${flags.stage}": the declared artifact set could not be ` +
-                "fingerprinted. Resolve the active intent and readable artifact paths, then retry.",
+              `Cannot start the review for "${flags.stage}" because the current output ` +
+                "documents could not be read and compared. Check the active workflow and output " +
+                "paths, then retry.",
             );
           }
           fields["Artifact Fingerprint"] = fingerprint;
@@ -1307,15 +1299,15 @@ function handleReview(args: string[]): void {
         if (attempt.pendingIterations.size > 0) {
           const pending = [...attempt.pendingIterations].sort((a, b) => a - b);
           refuseReview(
-            `Refusing REVIEW_REQUESTED for "${flags.stage}": iteration ${pending.join(", ")} ` +
-              "is still unmatched. Complete it, or repeat that exact ordinal with " +
-              "--retry-pending if the dispatch failed.",
+            `Cannot start another review for "${flags.stage}" because iteration ` +
+              `${pending.join(", ")} is still waiting for a verdict. Record that verdict, or ` +
+              "repeat the same iteration with --retry-pending if the reviewer did not run.",
           );
         }
         if (iteration !== expected) {
           refuseReview(
-            `Refusing REVIEW_REQUESTED for "${flags.stage}": iteration ${iteration} ` +
-              `is out of sequence; expected ${expected} from the current audit attempt.`,
+            `Cannot start review iteration ${iteration} for "${flags.stage}" because the next ` +
+              `iteration is ${expected}. Retry with --iteration ${expected}.`,
           );
         }
         if (recoveryEligible) {
@@ -1325,8 +1317,9 @@ function handleReview(args: string[]): void {
         const fingerprint = reviewArtifactFingerprint(pd, node, flags.unit);
         if (fingerprint === null) {
           refuseReview(
-            `Cannot record review for "${flags.stage}": the declared artifact set could not be ` +
-              "fingerprinted. Resolve the active intent and readable artifact paths, then retry.",
+            `Cannot start the review for "${flags.stage}" because the current output ` +
+              "documents could not be read and compared. Check the active workflow and output " +
+              "paths, then retry.",
           );
         }
         fields["Artifact Fingerprint"] = fingerprint;
@@ -1350,7 +1343,7 @@ function handleReview(args: string[]): void {
     error("--retry-pending cannot be combined with --verdict.");
   }
   if (!flags.iteration || !/^[1-9][0-9]*$/.test(flags.iteration)) {
-    error("REVIEW_COMPLETED requires --iteration <positive integer>.");
+    error("Recording a review verdict requires --iteration <positive integer>.");
   }
   const iteration = Number(flags.iteration);
   fields.Iteration = flags.iteration;
@@ -1367,8 +1360,8 @@ function handleReview(args: string[]): void {
       const { node, attempt } = loadContext(false);
       if (!attempt.pendingIterations.has(iteration)) {
         refuseReview(
-          `Refusing REVIEW_COMPLETED for "${flags.stage}": no unmatched ` +
-            `REVIEW_REQUESTED iteration ${iteration} exists in the current audit attempt.`,
+          `Cannot record a verdict for review iteration ${iteration} on "${flags.stage}" ` +
+            `because no pending request with that number exists. Start or retry that review first.`,
         );
       }
       const requestedFingerprint = attempt.pendingFingerprints.get(iteration);
@@ -1378,22 +1371,23 @@ function handleReview(args: string[]): void {
         !/^sha256:[0-9a-f]{64}$/.test(requestedFingerprint)
       ) {
         refuseReview(
-          `Refusing REVIEW_COMPLETED for "${flags.stage}": the matching REVIEW_REQUESTED ` +
-            `iteration ${iteration} has no valid artifact fingerprint. Re-dispatch that exact ` +
-            "iteration with --retry-pending before recording the verdict.",
+          `Cannot record the verdict for "${flags.stage}" because review iteration ${iteration} ` +
+            `was not bound to readable output documents. Re-run that iteration with ` +
+            `--retry-pending before recording the verdict.`,
         );
       }
       const fingerprint = reviewArtifactFingerprint(pd, node, flags.unit);
       if (fingerprint === null) {
         refuseReview(
-          `Cannot record review for "${flags.stage}": the declared artifact set could not be fingerprinted. Resolve the active intent and readable artifact paths, then record the verdict again.`,
+          `Cannot record the verdict for "${flags.stage}" because the current output documents ` +
+            `could not be read and compared. Check the active workflow and output paths, then retry.`,
         );
       }
       if (fingerprint !== requestedFingerprint) {
         refuseReview(
-          `Refusing REVIEW_COMPLETED for "${flags.stage}": declared artifacts changed after ` +
-            `REVIEW_REQUESTED iteration ${iteration}. Re-dispatch that exact iteration with ` +
-            "--retry-pending so the reviewer inspects the current bytes.",
+          `Cannot record the verdict for "${flags.stage}" because its output documents changed ` +
+            `after review iteration ${iteration} started. Re-run that iteration with ` +
+            `--retry-pending so the reviewer sees the current version.`,
         );
       }
       fields["Artifact Fingerprint"] = fingerprint;

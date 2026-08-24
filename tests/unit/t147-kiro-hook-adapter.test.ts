@@ -270,7 +270,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         },
       });
       expect(r.code).toBe(2);
-      expect(r.stderr).toContain("plan-approval guard");
+      expect(r.stderr).toContain("Code generation cannot start");
       expect(r.stderr).toContain("unit todo-core");
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -342,7 +342,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
           cwd: dir,
         });
         expect(r.code, `payload-${index}`).toBe(2);
-        expect(r.stderr, `payload-${index}`).toContain("plan-approval guard");
+        expect(r.stderr, `payload-${index}`).toContain("Code generation cannot start");
       }
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -366,7 +366,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         },
       });
       expect(r.code).toBe(2);
-      expect(r.stderr).toContain("plan-approval guard");
+      expect(r.stderr).toContain("Code generation cannot start");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -391,7 +391,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         },
       });
       expect(r.code).toBe(2);
-      expect(r.stderr).toContain("plan-approval guard");
+      expect(r.stderr).toContain("Code generation cannot start");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -504,7 +504,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
       expect(r.code).toBe(2);
       expect(r.stdout).toBe("");
       expect(r.stderr).toContain(
-        "Direct aidlc-state.ts approve is blocked",
+        "Stage status cannot be changed with aidlc-state.ts approve",
       );
       expect(r.stderr).toContain("aidlc-orchestrate.ts report");
     } finally {
@@ -725,7 +725,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         ["aidlc-design-agent"],
       );
       expect(r.code).toBe(2);
-      expect(r.stderr).toContain("workflow lifecycle and routing are conductor-owned");
+      expect(r.stderr).toContain("only the main workflow session can change stage status or routing");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
@@ -762,7 +762,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
           ["aidlc-architecture-reviewer-agent"],
         );
         expect(r.code, tool_name).toBe(2);
-        expect(r.stderr, tool_name).toContain("reviewer read-scope");
+        expect(r.stderr, tool_name).toContain("This review cannot open");
         expect(existsSync(reviewerHeartbeat), tool_name).toBe(true);
       }
 
@@ -783,7 +783,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
           ["aidlc-architecture-reviewer-agent"],
         );
         expect(r.code, tool_name).toBe(2);
-        expect(r.stderr, tool_name).toContain("reviewer read-scope");
+        expect(r.stderr, tool_name).toContain("This review cannot open");
         expect(existsSync(reviewerHeartbeat), tool_name).toBe(true);
       }
 
@@ -816,7 +816,7 @@ describe("t147 Kiro hook adapter (live-captured payload fixtures)", () => {
         ["aidlc-architecture-reviewer-agent"],
       );
       expect(operations.code).toBe(2);
-      expect(operations.stderr).toContain("reviewer read-scope");
+      expect(operations.stderr).toContain("This review cannot open");
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

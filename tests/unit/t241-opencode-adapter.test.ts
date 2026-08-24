@@ -279,7 +279,7 @@ describe("t241 OpenCode adapter reviewer scope", () => {
         { tool: "read", sessionID: "reviewer", callID: "sibling" },
         { args: { filePath: sibling } },
       ),
-    ).rejects.toThrow(/reviewer read-scope:/i);
+    ).rejects.toThrow(/This review cannot open/i);
     await expect(
       before(
         { tool: "read", sessionID: "reviewer", callID: "current" },
@@ -291,7 +291,7 @@ describe("t241 OpenCode adapter reviewer scope", () => {
         { tool: "list", sessionID: "reviewer", callID: "sibling-list" },
         { args: { path: dirname(sibling) } },
       ),
-    ).rejects.toThrow(/reviewer read-scope:/i);
+    ).rejects.toThrow(/This review cannot open/i);
   });
 });
 
@@ -320,7 +320,7 @@ describe("t241 OpenCode adapter state-transition guard", () => {
       );
     await expect(
       invoke("blocked", "bun .aidlc/tools/aidlc-state.ts approve user-stories"),
-    ).rejects.toThrow(/stage status is changed by the workflow tools/i);
+    ).rejects.toThrow(/Stage status cannot be changed with aidlc-state\.ts approve/i);
     await expect(
       invoke("readonly", "bun .aidlc/tools/aidlc-state.ts show"),
     ).resolves.toBeUndefined();
@@ -357,7 +357,7 @@ describe("t241 OpenCode adapter state-transition guard", () => {
         { tool: "bash", sessionID: "worker", callID: "worker-route" },
         { args: { command } },
       ),
-    ).rejects.toThrow(/conductor-owned/i);
+    ).rejects.toThrow(/only the main workflow session can change stage status or routing/i);
     await expect(
       before(
         { tool: "bash", sessionID: "main", callID: "main-route" },

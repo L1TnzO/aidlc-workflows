@@ -397,7 +397,7 @@ describe("t208 engine unit-kind pruning", () => {
     );
     expect(refused.kind).toBe("error");
     expect(refused.message).toContain("2 of 2 applicable units");
-    expect(refused.message).toContain("Never reviewed: alpha, beta");
+    expect(refused.message).toContain("Not yet reviewed: alpha, beta");
   }, 30000);
 
   test("5d: stale DAG healing keeps per-unit review enforcement complete", () => {
@@ -421,7 +421,7 @@ describe("t208 engine unit-kind pruning", () => {
     );
     expect(d.kind).toBe("error");
     expect(d.message).toContain("beta");
-    expect(d.message).toContain("no fresh recorded review");
+    expect(d.message).toContain("do not have a current review");
   }, 30000);
 
   test("5d2: a valid stale DAG cannot hide an authored unit from review enforcement", () => {
@@ -446,7 +446,7 @@ describe("t208 engine unit-kind pruning", () => {
     );
     expect(d.kind).toBe("error");
     expect(d.message).toContain("beta");
-    expect(d.message).toContain("no fresh recorded review");
+    expect(d.message).toContain("do not have a current review");
   }, 30000);
 
   test("5e: malformed dependency data fails closed instead of degrading to one review", () => {
@@ -508,8 +508,8 @@ describe("t208 engine unit-kind pruning", () => {
       true,
     );
     expect(refused.kind).toBe("error");
-    expect(refused.message).toContain("Invalidated receipts: alpha");
-    expect(refused.message).toContain("Never reviewed: beta");
+    expect(refused.message).toContain("Changed after review: alpha");
+    expect(refused.message).toContain("Not yet reviewed: beta");
     expect(refused.message).toContain(
       "For invalidated units with recovery available (alpha)",
     );

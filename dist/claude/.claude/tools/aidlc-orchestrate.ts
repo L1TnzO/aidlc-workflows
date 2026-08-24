@@ -5319,10 +5319,9 @@ function checkEnsembleEvidence(
   return {
     ok: false,
     message:
-      `Stage "${slug}" is mode: ${node.mode} - its ensemble must convene before approval, and the ` +
-      `contribution files are the evidence. Missing or malformed: ${missing.join("; ")}. ` +
-      `Dispatch each support agent to write ${contributionPath} ` +
-      `(first line: **Collaborator:** <agent-slug>) per stage-protocol-ensemble.md §5, then re-report. ` +
+      `Cannot present "${slug}" for approval because collaborator notes are missing or ` +
+      `incomplete: ${missing.join("; ")}. Ask each named collaborator to write ` +
+      `${contributionPath} with **Collaborator:** <agent-slug> on the first line, then try again. ` +
       `Set AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1 only to recover a legitimately-run stage whose files were lost.`,
   };
 }
@@ -5360,8 +5359,8 @@ function checkStageCompletionEvidence(
       return {
         ok: false,
         message:
-          `Stage "${slug}" is mode: pipeline and cannot enter or complete approval until every ` +
-          `declared link has a current-attempt PIPELINE_LINK_COMPLETED receipt. Missing: ${missing.join(", ")}. ` +
+          `Cannot present "${slug}" for approval because these pipeline handoffs have not ` +
+          `been recorded for the current run: ${missing.join(", ")}. ` +
           `After each link returns, run \`bun ${harnessDir()}/tools/aidlc-log.ts link --stage ${slug} ` +
           `--link <agent>${evidence.repos.length > 0 ? " --repo <repo>" : ""}\`. ` +
           `Set AIDLC_DISABLE_ENSEMBLE_EVIDENCE=1 only to recover a legitimately-run in-flight pipeline.`,
@@ -5413,9 +5412,9 @@ function checkStageCompletionEvidence(
         return {
           ok: false,
           message:
-            `Stage "${slug}" is per-unit (for_each: unit-of-work) and ${pick.uncovered.length} of ` +
-            `${units.length} units are not yet complete (${pick.uncovered.join(", ")}). ` +
-            "Run `next` to complete the remaining units before entering approval.",
+            `Cannot present "${slug}" for approval because ${pick.uncovered.length} of ` +
+            `${units.length} work items are not complete (${pick.uncovered.join(", ")}). ` +
+            "Run `next` to finish the remaining work items, then try again.",
         };
       }
     }
@@ -5856,8 +5855,7 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     if (res.exitCode !== 0) {
       const detail = (res.stderr || res.stdout).trim();
       emit(errorDirective(
-        `Transition rejected by aidlc-state.ts skip for "${slug}"` +
-          (detail ? `: ${detail}` : "."),
+        `Could not skip "${slug}"${detail ? `: ${detail}` : ". Run /aidlc --doctor if the reason is unclear."}`,
       ));
       return;
     }
@@ -6034,8 +6032,8 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     if (res.exitCode !== 0) {
       const detail = (res.stderr || res.stdout).trim();
       emit(errorDirective(
-        `Transition rejected by aidlc-state.ts ${subArgs[0]} for "${slug}"` +
-          (detail ? `: ${detail}` : "."),
+        `Could not update the approval status for "${slug}"` +
+          (detail ? `: ${detail}` : ". Run /aidlc --doctor if the reason is unclear."),
       ));
       return;
     }
@@ -6073,10 +6071,9 @@ function handleReport(args: string[], projectDir: string | undefined): void {
     !hasFreshPracticesAffirmationReceipt(pd, stateContent)
   ) {
     emit(errorDirective(
-      'Cannot approve "practices-discovery" before practices-promote succeeds. ' +
-        "Run aidlc-state.ts practices-promote after the human approves; it records " +
-        "Practices Affirmed Timestamp and a fresh PRACTICES_AFFIRMED receipt for " +
-        "this stage attempt, then report --result approved --user-input \"<exact choice>\".",
+      'Cannot approve "practices-discovery" because the approved practices have not been saved yet. ' +
+        "Run aidlc-state.ts practices-promote after the human approves, then report " +
+        '--result approved --user-input "<exact choice>".',
     ));
     return;
   }
@@ -6150,9 +6147,8 @@ function handleReport(args: string[], projectDir: string | undefined): void {
         emit({
           kind: "error",
           message:
-            `Stage "${slug}" is still in-progress. To approve a gated stage that has not entered ` +
-            `awaiting-approval, report the acted directive explicitly with --stage "${slug}" so ` +
-            "the engine cannot mistake a freshly advanced Current Stage for the completed one.",
+            `Stage "${slug}" is still in progress. To approve it before its approval question ` +
+            `has been recorded, retry the report with --stage "${slug}".`,
         });
         return;
       }
@@ -6185,8 +6181,8 @@ function handleReport(args: string[], projectDir: string | undefined): void {
       emit({
         kind: "error",
         message:
-          `Transition rejected by aidlc-state.ts ${subArgs[0]} for "${slug}"` +
-          (detail ? `: ${detail}` : "."),
+          `Could not complete "${slug}"` +
+          (detail ? `: ${detail}` : ". Run /aidlc --doctor if the reason is unclear."),
       });
       return;
     }

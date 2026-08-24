@@ -219,7 +219,7 @@ describe("t304 pipeline link receipts", () => {
 
     const gate = state(proj, ["gate-start", RE_STAGE]);
     expect(gate.rc).not.toBe(0);
-    expect(gate.out).toContain("PIPELINE_LINK_COMPLETED");
+    expect(gate.out).toContain("pipeline handoffs have not been recorded");
     expect(gate.out).toContain(FINAL);
 
     expect(state(proj, ["gate-start", RE_STAGE], true).rc).toBe(0);
@@ -228,7 +228,7 @@ describe("t304 pipeline link receipts", () => {
       ["approve", RE_STAGE, "--user-input", "Approve"],
     );
     expect(approve.rc).not.toBe(0);
-    expect(approve.out).toContain("PIPELINE_LINK_COMPLETED");
+    expect(approve.out).toContain("pipeline handoffs have not been recorded");
     expect(readFileSync(seededStateFile(proj), "utf-8")).toContain(
       `- [?] ${RE_STAGE}`,
     );
