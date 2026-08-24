@@ -159,6 +159,7 @@ const shippedAidlcEntrypoints: ReadonlySet<string> = new Set<string>(
     "tools/aidlc-orchestrate.ts",
     "tools/aidlc-plugin-build.ts",
     "tools/aidlc-plugin-emit.ts",
+    "tools/aidlc-plugin-test.ts",
     "tools/aidlc-plugin-validate.ts",
     "tools/aidlc-rule-schema.ts",
     "tools/aidlc-runner-gen.ts",
