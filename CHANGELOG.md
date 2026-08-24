@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.79] - 2026-08-24
+
+The rules documentation now describes the org-conflict comparison as an orchestrator-run LLM audit aid rather than a deterministic persistence boundary, and the shared audit-field parser documents its first-occurrence behavior. No runtime behavior changes. **Upgrade:** no action is required.
+
+* Correct the guide and developer references to explain that `aidlc-learnings.ts persist` accepts the selections it receives without reading `org.md`, while practices-discovery promotion does not run the org-conflict check.
+* Document that `auditBlockField` returns the first matching field and must not support authenticate-then-re-read flows unless callers separately reject duplicates.
+
 ## [2.6.70] - 2026-08-24
 
 Bugfix and refactor workflows now carry verified changes through the existing deployment path instead of stopping after Build and Test. **Upgrade:** refresh your `dist/<harness>/` shell to pick up the expanded scope grids, deployment fallback, and skip-provenance fix.
