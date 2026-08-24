@@ -99,9 +99,10 @@ practices-discovery affirmation gate and the learning gate (below) — so by the
 time a rule reaches the resolver, it has already passed conflict-check. Two
 read-only `/aidlc --doctor` rows surface state after the fact: a **rule-drift**
 row flags headings where team or project content overlaps a populated org heading
-(a candidate contradiction for a human to verify), and a **paired-coverage** row
-reports how many rules name a sensor that actually resolves. Both are advisory and
-never change the exit code. See
+(a candidate contradiction for a human to verify), with lifecycle-stale files
+reported separately as stale-suppressed, and a **paired-coverage** row reports how
+many rules name a sensor that actually resolves. Both are advisory and never
+change the exit code. See
 [Rule System § Rule-drift detection](../reference/08-rule-system.md#rule-drift-detection).
 
 ---

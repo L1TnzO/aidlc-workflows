@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.73] - 2026-08-24
+
+Rule files can now carry validated lifecycle metadata, and doctor separates stale team/project overlaps from live contradiction-review candidates without changing runtime rule delivery. **Upgrade:** refresh your `dist/<harness>/` shell; add lifecycle fields only where you want file-level drift triage.
+
+* Add optional `status: active|deprecated|draft` and `stale_after: YYYY-MM-DD` rule frontmatter, with compile-time validation that names the invalid file.
+* `/aidlc --doctor` keeps live rule-drift output unchanged and reports deprecated or date-expired file overlaps in one passing `Rule drift: N stale-suppressed` row.
+
 ## [2.6.70] - 2026-08-24
 
 Bugfix and refactor workflows now carry verified changes through the existing deployment path instead of stopping after Build and Test. **Upgrade:** refresh your `dist/<harness>/` shell to pick up the expanded scope grids, deployment fallback, and skip-provenance fix.
