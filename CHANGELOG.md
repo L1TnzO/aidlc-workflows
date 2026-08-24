@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.69] - 2026-08-24
+
+Plugin authors can now validate an authored plugin repository offline with the shipped standalone validator, without an AIDLC project or framework checkout. **Upgrade:** refresh your `dist/<harness>/` shell to install the validator and its bundled compose-hook reference.
+
+* Run `bun <tools-dir>/aidlc-plugin-validate.ts <plugin-root> [--json]`; exit codes are `0` valid, `1` findings, and `2` usage.
+* Validation covers manifest shape, stage schema, scope and agent identity, plugin-local duplicate artifact producers across `produces` and `optional_produces`, accidental test/fixture payloads under `tools/`, and vendored compose-hook drift.
+* `tests/harness/plugin-kit.ts` now delegates its overlapping content rules to the shipped validator while retaining checkout-aware contribution-target and extra authoring checks.
+
 ## [2.6.68] - 2026-08-24
 
 Summary-confirmation receipts now bind to the semantic questions and summary content the human reviewed while allowing the required post-generation assumption section. The contract is versioned, preserves legacy receipt verification, and reports an actionable recovery path for invalidated confirmations. **Upgrade:** refresh your `dist/<harness>/` shell so the scoped receipt, Markdown visibility, and recovery contracts stay aligned.
