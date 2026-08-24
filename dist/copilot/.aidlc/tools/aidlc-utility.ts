@@ -126,6 +126,7 @@ import {
   stageEnabledBySelection,
   stagesInScope,
   stateFilePath,
+  clearSessionIntentUuid,
   withAuditLock,
   validateBoltSlug,
   validScopes,
@@ -5106,6 +5107,8 @@ function handleSpace(projectDir: string, positional: string[], flags: Record<str
         (entry) => entry.dirName === targetIntent,
       )?.uuid;
       if (uuid) writeSessionIntentUuid(projectDir, sessionId, uuid);
+    } else {
+      clearSessionIntentUuid(projectDir, sessionId);
     }
   }
   // Re-point the harness-native includes at the switched space so the NEXT turn
