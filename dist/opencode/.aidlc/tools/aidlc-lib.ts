@@ -4890,6 +4890,7 @@ export function checkSummaryConfirmationEvidence(
 
     for (const artifact of summaryArtifactPaths(stage, question)) {
       const artifactAbs = resolvePath(artifact);
+      const artifactSuffix = "/" + toPosix(relative(projectDir, artifactAbs));
       const writes = events.filter((entry) => {
         if (
           entry.event !== "ARTIFACT_CREATED" &&
@@ -4898,8 +4899,14 @@ export function checkSummaryConfirmationEvidence(
           return false;
         }
         const file = auditBlockField(entry.block, "File");
-        return file !== null &&
-          resolveAuditProjectPath(projectDir, file) === artifactAbs;
+        if (file === null) return false;
+        const norm = file.replace(/\\/g, "/");
+        return (
+          resolveAuditProjectPath(projectDir, file) === artifactAbs ||
+          // #863: preserve writes across workspace moves. The leading slash
+          // and full space/intent/phase/stage tail prevent partial matches.
+          norm.endsWith(artifactSuffix)
+        );
       });
       const writeAfterReceipt = writes.some((entry) => {
         if (entry.shard === receipt.shard) return entry.pos > receipt.pos;

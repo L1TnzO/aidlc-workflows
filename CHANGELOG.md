@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.71] - 2026-08-24
+
+Summary-confirmation artifact-write receipts now remain valid when the same workflow workspace is moved or cloned to a different filesystem location, without weakening their causal ordering. **Upgrade:** refresh your `dist/<harness>/` shell so completion guards use the portable receipt matcher.
+
+* Completion no longer reports `no recorded native-tool write after the human's consolidated summary confirmation` solely because an audit row contains the artifact's absolute path from the workspace's previous location.
+* Moved or cloned workspaces no longer deadlock when the completion guard rejects the old absolute prefix and review-freeze blocks the prescribed artifact re-save; the full space/intent/phase/stage-relative artifact tail now identifies the same recorded write.
+
 ## [2.6.69] - 2026-08-24
 
 Per-unit source review now binds the manifest and claimed source at dispatch, and sibling-repository Bolt worktrees preserve application source under root `aidlc/` and `.aidlc/` directories. **Upgrade:** refresh your `dist/<harness>/` shell; write a valid `source-manifest.json` before every per-unit workspace review request, and use `--retry-pending` to re-dispatch after any pre-verdict source change.
