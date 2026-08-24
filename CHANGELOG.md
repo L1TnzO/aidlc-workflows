@@ -1,6 +1,15 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.71] - 2026-08-24
+
+`/aidlc --doctor` now fails when hooks have never executed after workflow progress and detects Claude Code organization policy that blocks project hooks. **Upgrade:** re-copy your `dist/<harness>/` shell into the project.
+
+* Zero hook heartbeats remain a passing first-run advisory only before workflow progress; afterwards the failing row names the number of progressed stages and gives ordered `/hooks`, full-restart, administrator-policy, and attended-session bypass actions.
+* Existing heartbeats are compared with the latest stage/gate audit timestamp; doctor fails when workflow progress is more than five minutes newer, identifying hooks that stopped executing after an earlier healthy session.
+* Claude installs fail doctor when managed `allowManagedHooksOnly` policy blocks `.claude/settings.json` hooks, naming the administrator-owned remediation and the two attended-session receipt-guard bypass environment variables.
+* A passing advisory identifies stage/gate ledgers with no `HUMAN_TURN` receipts before presence-gated checkpoints begin refusing.
+
 ## [2.6.65] - 2026-08-23
 
 Stage graph compilation now rejects ambiguous producers before consumers can resolve an artifact by file order. **Upgrade:** refresh your `dist/<harness>/` shell; existing custom stages or plugins that declare the same consumed artifact in `produces` or `optional_produces` must rename one output or update the consumer.

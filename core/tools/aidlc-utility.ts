@@ -27,6 +27,7 @@ import {
   buildBundle,
   type LegacyDoctorResult,
   mergeFindings,
+  parseAuditEvents,
   redactSecretPatterns,
   runDoctorAnalysis,
 } from "./aidlc-doctor-bundle.ts";
@@ -48,6 +49,7 @@ import { workspaceManifestChecks } from "./aidlc-workspace-doctor.ts";
 import {
   activeIntent,
   activeSpace,
+  auditBlockField,
   auditFilePath,
   auditShards,
   createIntent,
@@ -1277,6 +1279,57 @@ const PLUGIN_DOCTOR_FINDING_ID_MAX = 48;
 const PLUGIN_NAME_REGEX = /^[a-z][a-z0-9-]*$/;
 const PLUGIN_DOCTOR_REQUIRED_JSON =
   '{"checks":[{"pass":boolean,"label":string,"fix"?:string,"severity"?:"error"|"advisory"}]}';
+const HOOK_EXECUTION_RECOVERY =
+  "1. Run /hooks to check hook approval and policy state. 2. If hooks need approval, approve them and fully restart the CLI; approval does not take effect until a full restart. 3. If /hooks says hooks are restricted by policy, only your Claude Code administrator can lift allowManagedHooksOnly in managed-settings.json. Until then, for an attended session, launch the CLI with AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 and AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD=1";
+// Hook heartbeats and audit rows are written in the same turn, normally
+// seconds apart. Five minutes absorbs host scheduling and slow tool-return
+// ordering without hiding a resumed workflow that advances after hooks die.
+const HOOK_HEARTBEAT_STALE_SLACK_MS = 5 * 60 * 1000;
+
+function claudeManagedSettingsDir(): string {
+  const override = process.env.AIDLC_CLAUDE_MANAGED_SETTINGS_DIR?.trim();
+  if (override) return isAbsolute(override) ? override : resolve(process.cwd(), override);
+  if (process.platform === "darwin") {
+    return "/Library/Application Support/ClaudeCode";
+  }
+  if (process.platform === "win32") {
+    return "C:\\Program Files\\ClaudeCode";
+  }
+  return "/etc/claude-code";
+}
+
+function claudeManagedHooksOnly(): boolean {
+  const root = claudeManagedSettingsDir();
+  const files = [join(root, "managed-settings.json")];
+  try {
+    const fragmentsDir = join(root, "managed-settings.d");
+    for (const name of readdirSync(fragmentsDir).sort()) {
+      if (!name.endsWith(".json")) continue;
+      const path = join(fragmentsDir, name);
+      try {
+        if (statSync(path).isFile()) files.push(path);
+      } catch {
+        // Unreadable/vanished fragments are equivalent to absent policy.
+      }
+    }
+  } catch {
+    // An absent or unreadable fragment directory carries no policy.
+  }
+
+  let effective: boolean | undefined;
+  for (const path of files) {
+    try {
+      const parsed = JSON.parse(readFileSync(path, "utf-8")) as Record<string, unknown>;
+      if (typeof parsed.allowManagedHooksOnly === "boolean") {
+        effective = parsed.allowManagedHooksOnly;
+      }
+    } catch {
+      // Managed policy is external to the workspace; absent/unreadable files
+      // must not make doctor fail independently of an observed true setting.
+    }
+  }
+  return effective === true;
+}
 
 function frontmatterFields(filePath: string, kind: "Agent" | "Scope"): { name: string; plugin: string } {
   const body = readFileSync(filePath, "utf-8");
@@ -2067,6 +2120,18 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
     });
   }
 
+  // Claude Code managed policy can register the project's settings file while
+  // refusing to execute every hook it declares. The harness descriptor is the
+  // authoritative discriminator because Copilot and opencode share an engine
+  // directory and future harnesses need no hardcoded path inference here.
+  if (harnessName === "claude" && claudeManagedHooksOnly()) {
+    results.push({
+      pass: false,
+      label: "Claude managed hook policy: allowManagedHooksOnly=true",
+      fix: "hooks from .claude/settings.json are blocked by organization policy (allowManagedHooksOnly); only the Claude Code administrator can lift it in managed-settings.json. Until then, the workflow's human-presence and summary-confirmation receipts cannot be minted; attended sessions can set AIDLC_SKIP_HUMAN_PRESENCE_GUARD=1 and AIDLC_SKIP_SUMMARY_CONFIRMATION_GUARD=1 in the environment that launches the CLI as a temporary bypass",
+    });
+  }
+
   // 4b. Dual-harness coexistence (D-11): another harness tree installed AND a
   // workflow active is supported-but-untested — warn (advisory pass with a
   // visible label), never block.
@@ -2334,15 +2399,74 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
     }
   }
 
+  // Read workflow evidence once for the heartbeat check, state/audit drift,
+  // and the human-turn receipt advisory below.
+  const stateMdPath = stateFilePath(projectDir);
+  const auditAllShards = readAllAuditShards(projectDir);
+  const auditEvents = parseAuditEvents(auditAllShards);
+  let stateContent = "";
+  try {
+    if (existsSync(stateMdPath)) {
+      stateContent = readFileSync(stateMdPath, "utf-8");
+    }
+  } catch {
+    // An unreadable state contributes no progress evidence; audit evidence
+    // remains available independently.
+  }
+  const stateProgressedStages = new Set(
+    parseCheckboxes(stateContent)
+      .filter((entry) => entry.state !== "pending")
+      .map((entry) => entry.slug),
+  );
+  const stageOrGateEvents = auditEvents.filter(
+    (event) =>
+      event.event.startsWith("STAGE_") || event.event.startsWith("GATE_"),
+  );
+  let newestStageOrGateEvent: {
+    timestampMs: number;
+    timestampRaw: string;
+  } | null = null;
+  for (const event of stageOrGateEvents) {
+    if (
+      Number.isFinite(event.timestampMs) &&
+      (
+        newestStageOrGateEvent === null ||
+        event.timestampMs > newestStageOrGateEvent.timestampMs
+      )
+    ) {
+      newestStageOrGateEvent = {
+        timestampMs: event.timestampMs,
+        timestampRaw: event.timestampRaw,
+      };
+    }
+  }
+  const auditProgressedStages = new Set(
+    stageOrGateEvents
+      .map(
+        (event) =>
+          auditBlockField(event.block, "Stage") ??
+          auditBlockField(event.block, "Slug"),
+      )
+      .filter((slug): slug is string => slug !== null),
+  );
+  const progressedStageCount = Math.max(
+    stateProgressedStages.size,
+    auditProgressedStages.size,
+  );
+  const workflowHasProgress = progressedStageCount > 0;
+
   // 6. Hook heartbeats
   // Three states:
   //   (a) .aidlc-hooks-health/ missing entirely → fresh install, hooks haven't
-  //       had a chance to fire yet. Pass with advisory label — not drift.
+  //       had a chance to fire yet. Pass only while the audit shows no workflow
+  //       progress; once work has advanced, zero heartbeats are drift.
   //   (b) Directory exists but no .last files → hooks registered but have
   //       never fired. Genuine drift; fail.
   //   (c) Directory has .last files → hooks are working; pass with timestamps.
   const healthDir = hooksHealthDir(projectDir);
   const heartbeatEntries: string[] = [];
+  let newestHeartbeat: { timestampMs: number; timestampRaw: string } | null =
+    null;
   const heartbeatDirExists = existsSync(healthDir);
   // A health dir that exists but carries NO hook-fired content is equivalent to
   // "not yet fired" (state a), not drift (state b). Besides the `.last`
@@ -2362,6 +2486,16 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
           const ts = readFileSync(join(healthDir, f), "utf-8").trim();
           const name = f.replace(".last", "");
           heartbeatEntries.push(`${name} ${ts}`);
+          const timestampMs = Date.parse(ts);
+          if (
+            Number.isFinite(timestampMs) &&
+            (
+              newestHeartbeat === null ||
+              timestampMs > newestHeartbeat.timestampMs
+            )
+          ) {
+            newestHeartbeat = { timestampMs, timestampRaw: ts };
+          }
         } catch {
           // skip unreadable
         }
@@ -2371,10 +2505,35 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
     }
   }
   if (heartbeatEntries.length > 0) {
-    // (c) hooks working
+    // (c) heartbeat files exist. Compare their newest parseable timestamp with
+    // the newest parseable stage/gate event; malformed timestamps remain
+    // visible in the existing label but are not evidence of staleness.
+    if (
+      newestHeartbeat !== null &&
+      newestStageOrGateEvent !== null &&
+      newestStageOrGateEvent.timestampMs - newestHeartbeat.timestampMs >
+        HOOK_HEARTBEAT_STALE_SLACK_MS
+    ) {
+      results.push({
+        pass: false,
+        label: `Hooks last fired ${newestHeartbeat.timestampRaw}, but the workflow last advanced ${newestStageOrGateEvent.timestampRaw}`,
+        fix: HOOK_EXECUTION_RECOVERY,
+      });
+    } else {
+      results.push({
+        pass: true,
+        label: `Hooks last fired: ${heartbeatEntries.join(", ")}`,
+      });
+    }
+  } else if (
+    (!heartbeatDirExists || !hasHookFiredContent) &&
+    workflowHasProgress
+  ) {
+    const stages = progressedStageCount === 1 ? "stage" : "stages";
     results.push({
-      pass: true,
-      label: `Hooks last fired: ${heartbeatEntries.join(", ")}`,
+      pass: false,
+      label: `Hooks have never executed although this workflow has progressed ${progressedStageCount} ${stages}`,
+      fix: HOOK_EXECUTION_RECOVERY,
     });
   } else if (!heartbeatDirExists || !hasHookFiredContent) {
     // (a) fresh install (dir absent) OR a debug-only dir with no heartbeats yet
@@ -2389,6 +2548,16 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
       pass: false,
       label: "Hook heartbeat data",
       fix: "health dir exists but no hooks have fired — verify hooks are registered in settings.json",
+    });
+  }
+
+  if (
+    stageOrGateEvents.length > 0 &&
+    !auditEvents.some((event) => event.event === "HUMAN_TURN")
+  ) {
+    results.push({
+      pass: true,
+      label: `Human-turn receipts: 0 HUMAN_TURN rows across ${stageOrGateEvents.length} stage/gate event(s) (advisory) - receipts are not being minted, so presence-gated checkpoints will refuse`,
     });
   }
 
@@ -2469,9 +2638,6 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
   // should be in a certain shape (e.g., Status=Completed after WORKFLOW_COMPLETED),
   // verify the state actually matches. Covers the rare case where audit-first
   // succeeded but the state write failed (disk full, permission lost mid-run).
-  const stateMdPath = stateFilePath(projectDir);
-  // Read across every per-clone audit shard (single shard in the common case).
-  const auditAllShards = readAllAuditShards(projectDir);
   if (existsSync(stateMdPath) && auditAllShards.length > 0) {
     try {
       const auditContent = auditAllShards;
