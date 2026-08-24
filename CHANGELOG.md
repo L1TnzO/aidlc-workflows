@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.69] - 2026-08-24
+
+Filesystem descendant checks now enforce one mixed-separator boundary on every host, preventing Windows traversal and alias escapes while preserving valid in-bound drive and UNC paths. **Upgrade:** refresh your `dist/<harness>/` shell so every tool receives the strengthened shared path guard.
+
+* Relative descendants are parsed with Windows-aware structured path APIs before native joining, so `/` and `\` both delimit components; `..`, POSIX roots, drive-rooted and drive-relative paths, and UNC inputs are refused before filesystem access.
+* Symlink and junction inspection now walks each mixed-separator component before permitting an existing or not-yet-created descendant, preventing an alias from being hidden ahead of a missing leaf.
+
 ## [2.6.68] - 2026-08-24
 
 Summary-confirmation receipts now bind to the semantic questions and summary content the human reviewed while allowing the required post-generation assumption section. The contract is versioned, preserves legacy receipt verification, and reports an actionable recovery path for invalidated confirmations. **Upgrade:** refresh your `dist/<harness>/` shell so the scoped receipt, Markdown visibility, and recovery contracts stay aligned.
