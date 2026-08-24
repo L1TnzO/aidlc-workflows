@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.75] - 2026-08-24
+
+Plugin composition now keeps co-located tests and fixtures out of the installed engine tools tree and reports every rejected payload. **Upgrade:** refresh your `dist/<harness>/` shell and each plugin projection, then re-compose plugins; remove any already-installed file named by the new advisory and re-run compose.
+
+* Files under a plugin's `tools/tests/`, `tools/__tests__/`, or `tools/fixtures/` directories, plus `*.test.ts` and `*.spec.ts` tool files, are skipped with an advisory drop that points authors to the top-level `tests/` convention.
+* Previously composed test payloads remain untouched by no-clobber composition but are now audited and reported with removal guidance.
+
 ## [2.6.68] - 2026-08-24
 
 Summary-confirmation receipts now bind to the semantic questions and summary content the human reviewed while allowing the required post-generation assumption section. The contract is versioned, preserves legacy receipt verification, and reports an actionable recovery path for invalidated confirmations. **Upgrade:** refresh your `dist/<harness>/` shell so the scoped receipt, Markdown visibility, and recovery contracts stay aligned.

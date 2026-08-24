@@ -85,6 +85,10 @@ block:
 `tools` lands CLI scripts in the harness `tools/` dir so a plugin can ship a
 **runnable sensor** (its manifest in `sensors/` + its script in `tools/`) and an
 optional doctor check.
+Keep tests and fixtures in the plugin's top-level `tests/` directory, never
+inside `tools/`. Compose drops files under `tools/tests/`, `tools/__tests__/`,
+or `tools/fixtures/`, plus co-located `*.test.ts` and `*.spec.ts` files, and
+records an advisory drop surfaced by `/aidlc --doctor`.
 `memory` merges into the default-space method seed, **not** a `rules/` dir (that
 directory is no longer read — see §4). `overlays` is special: it is **not**
 copied; it holds the per-stage contributions consumed by the merge (§3).
