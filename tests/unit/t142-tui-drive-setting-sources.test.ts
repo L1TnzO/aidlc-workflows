@@ -8,7 +8,15 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { readFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   readAllAuditShards,
@@ -19,17 +27,25 @@ import {
   SNAPSHOT_STAGE_SLUG,
 } from "../harness/custom-harness.ts";
 import {
+  collectWindowsProcessTree,
   gridHasOption,
   gridIsApprovalGate,
   normalizeTuiCommand,
   pickRevisionOption,
   pickRevisionTypeSomethingOption,
+  resolveWindowsDaemonIdentity,
+  terminateAndAwaitWindowsProcessTree,
+  type WindowsProcessInfo,
 } from "../harness/tui-drive.ts";
 import {
+  assertNoPendingTuiSessionsForProject,
   cleanupTuiProject,
+  cleanupTuiProjectAfterKill,
   compileTuiRuntimeGraph,
   createKiroNumberedProseAnswerState,
   nextKiroNumberedProseAnswer,
+  pendingTuiSessionsForProject,
+  removeTuiProjectTreeWithRetry,
   setupTuiProject,
 } from "../harness/tui-fixtures.ts";
 import { seededRecordDir } from "../harness/fixtures.ts";
@@ -153,6 +169,579 @@ describe("tui-drive setting-source isolation", () => {
     expect(
       normalizeTuiCommand(["node", "script.js", "claude"], env()),
     ).toEqual(["node", "script.js", "claude"]);
+  });
+});
+
+function winProcess(
+  pid: number,
+  parentPid: number,
+  name: string,
+  commandLine = name,
+  creationDate = `created-${pid}`,
+  creationTimeMs = pid,
+): WindowsProcessInfo {
+  return {
+    pid,
+    parentPid,
+    name,
+    commandLine,
+    creationDate,
+    creationTimeMs,
+  };
+}
+
+describe("Windows TUI teardown and cleanup races", () => {
+  test("process-tree collection follows descendants through the ConPTY daemon", () => {
+    const unrelated = winProcess(900, 1, "unrelated.exe");
+    expect(
+      collectWindowsProcessTree(
+        [
+          winProcess(100, 1, "node.exe", "tui-drive.ts __win-daemon"),
+          winProcess(101, 100, "claude.exe"),
+          winProcess(102, 101, "cmd.exe"),
+          unrelated,
+        ],
+        [100],
+      ),
+    ).toEqual([
+      winProcess(100, 1, "node.exe", "tui-drive.ts __win-daemon"),
+      winProcess(101, 100, "claude.exe"),
+      winProcess(102, 101, "cmd.exe"),
+    ]);
+  });
+
+  test("ignores stale PID ancestry and selects only the token-bound daemon", () => {
+    const stale = winProcess(110, 1, "unrelated.exe", "unrelated.exe --serve");
+    const staleChild = winProcess(111, 110, "worker.exe");
+    const daemon = winProcess(
+      120,
+      1,
+      "node.exe",
+      '"C:\\Program Files\\nodejs\\node.exe" --experimental-strip-types ' +
+        "C:\\repo\\tests\\harness\\tui-drive.ts __win-daemon " +
+        "--session session-1 --daemon-token token-1 --cwd C:\\project",
+    );
+    const daemonChild = winProcess(121, 120, "claude.exe");
+    const result = resolveWindowsDaemonIdentity(
+      [stale, staleChild, daemon, daemonChild],
+      {
+        session: "session-1",
+        daemonToken: "token-1",
+        driverPath: "C:\\repo\\tests\\harness\\tui-drive.ts",
+        recordedPid: stale.pid,
+      },
+    );
+    expect(result.daemon?.pid).toBe(120);
+    expect(result.stalePidProcess?.pid).toBe(110);
+    expect(result.initialProcesses.map((processInfo) => processInfo.pid)).toEqual([
+      120,
+      121,
+    ]);
+  });
+
+  test("excludes an initial orphan older than its current same-PID parent", async () => {
+    let now = 0;
+    let reads = 0;
+    const forced: number[] = [];
+    const daemon = winProcess(
+      100,
+      1,
+      "node.exe",
+      "tui-drive.ts __win-daemon --session old-orphan --daemon-token token",
+      "daemon-new",
+      2_000,
+    );
+    const olderOrphan = winProcess(
+      200,
+      100,
+      "orphan.exe",
+      "orphan",
+      "orphan-old",
+      1_000,
+    );
+    const orphanChild = winProcess(
+      201,
+      200,
+      "orphan-child.exe",
+      "orphan-child",
+      "orphan-child-old",
+      1_100,
+    );
+    const resolution = resolveWindowsDaemonIdentity(
+      [daemon, olderOrphan, orphanChild],
+      {
+        session: "old-orphan",
+        daemonToken: "token",
+        driverPath: "tui-drive.ts",
+        recordedPid: daemon.pid,
+      },
+    );
+    expect(resolution.initialProcesses.map((processInfo) => processInfo.pid)).toEqual([
+      100,
+    ]);
+
+    const snapshots = [
+      [daemon, olderOrphan, orphanChild],
+      [olderOrphan, orphanChild],
+    ];
+    const result = await terminateAndAwaitWindowsProcessTree(
+      daemon.pid,
+      {
+        listProcesses: () => snapshots[Math.min(reads++, snapshots.length - 1)],
+        terminateTree: (pid) => {
+          forced.push(pid);
+          return { pid, status: 0, stdout: "SUCCESS", stderr: "" };
+        },
+        now: () => now,
+        sleep: async (ms) => {
+          now += ms;
+        },
+      },
+      {
+        gracefulMs: 0,
+        forcedMs: 10,
+        pollMs: 5,
+        initialProcesses: [daemon, olderOrphan, orphanChild],
+      },
+    );
+    expect(result.graceful).toBe(false);
+    expect(forced).toEqual([100]);
+    expect(result.knownProcesses.map((processInfo) => processInfo.pid)).toEqual([
+      100,
+    ]);
+  });
+
+  test("refuses a reused PID when no token-bound daemon exists", () => {
+    const stale = winProcess(130, 1, "unrelated.exe", "unrelated.exe --serve");
+    expect(() =>
+      resolveWindowsDaemonIdentity([stale], {
+        session: "session-2",
+        daemonToken: "token-2",
+        driverPath: "C:\\repo\\tests\\harness\\tui-drive.ts",
+        recordedPid: stale.pid,
+      })
+    ).toThrow(/points to a non-daemon process; refusing taskkill[\s\S]*PID 130/);
+  });
+
+  test("recovers a live daemon when PID metadata is missing or corrupt", () => {
+    const daemon = winProcess(
+      140,
+      1,
+      "node.exe",
+      '"C:\\Program Files\\nodejs\\node.exe" --experimental-strip-types ' +
+        "C:\\repo\\tests\\harness\\tui-drive.ts __win-daemon " +
+        "--session session-3 --daemon-token token-3 --cwd C:\\project",
+    );
+    const result = resolveWindowsDaemonIdentity([daemon], {
+      session: "session-3",
+      daemonToken: "token-3",
+      driverPath: "C:\\repo\\tests\\harness\\tui-drive.ts",
+    });
+    expect(result.daemon?.pid).toBe(140);
+    expect(result.stalePidProcess).toBeUndefined();
+  });
+
+  test("missing PID metadata without a proven daemon fails closed", () => {
+    expect(() =>
+      resolveWindowsDaemonIdentity([], {
+        session: "session-4",
+        daemonToken: "token-4",
+        driverPath: "C:\\repo\\tests\\harness\\tui-drive.ts",
+      })
+    ).toThrow(/missing\/corrupt PID metadata[\s\S]*refusing cleanup/);
+  });
+
+  test("awaits graceful exit, then force-kills a surviving descendant", async () => {
+    let now = 0;
+    let reads = 0;
+    const forced: number[] = [];
+    const root = winProcess(100, 1, "node.exe", "tui-drive.ts __win-daemon");
+    const child = winProcess(101, 100, "claude.exe", "claude.exe");
+    const snapshots = [
+      [root, child],
+      [root, child],
+      [root, child],
+      [child],
+      [],
+    ];
+    const result = await terminateAndAwaitWindowsProcessTree(
+      root.pid,
+      {
+        listProcesses: () => snapshots[Math.min(reads++, snapshots.length - 1)],
+        terminateTree: (pid) => {
+          forced.push(pid);
+          return { pid, status: 0, stdout: "SUCCESS", stderr: "" };
+        },
+        now: () => now,
+        sleep: async (ms) => {
+          now += ms;
+        },
+      },
+      {
+        gracefulMs: 10,
+        forcedMs: 30,
+        pollMs: 5,
+        initialProcesses: [root, child],
+      },
+    );
+    expect(result.graceful).toBe(false);
+    expect(forced).toEqual([100, 101]);
+    expect(result.knownProcesses.map((processInfo) => processInfo.pid)).toEqual([
+      100,
+      101,
+    ]);
+  });
+
+  test("retains descendants captured before an intermediate parent exits", async () => {
+    let now = 0;
+    let reads = 0;
+    const forced: number[] = [];
+    const root = winProcess(150, 1, "node.exe", "tui-drive.ts __win-daemon");
+    const intermediate = winProcess(151, 150, "claude.exe");
+    const descendant = winProcess(152, 151, "cmd.exe");
+    const snapshots = [[descendant], []];
+    const result = await terminateAndAwaitWindowsProcessTree(
+      root.pid,
+      {
+        listProcesses: () => snapshots[Math.min(reads++, snapshots.length - 1)],
+        terminateTree: (pid) => {
+          forced.push(pid);
+          return { pid, status: 0, stdout: "SUCCESS", stderr: "" };
+        },
+        now: () => now,
+        sleep: async (ms) => {
+          now += ms;
+        },
+      },
+      {
+        gracefulMs: 0,
+        forcedMs: 10,
+        pollMs: 5,
+        initialProcesses: [root, intermediate, descendant],
+      },
+    );
+    expect(result.graceful).toBe(false);
+    expect(forced).toEqual([152]);
+    expect(result.knownProcesses.map((processInfo) => processInfo.pid)).toEqual([
+      150,
+      151,
+      152,
+    ]);
+  });
+
+  test("does not adopt descendants of a reused known PID", async () => {
+    let now = 0;
+    let reads = 0;
+    const forced: number[] = [];
+    const root = winProcess(160, 1, "daemon.exe", "daemon", "root-old", 1_000);
+    const oldChild = winProcess(
+      161,
+      160,
+      "old-child.exe",
+      "old-child",
+      "child-old",
+      1_100,
+    );
+    const reusedParent = winProcess(
+      161,
+      1,
+      "unrelated-parent.exe",
+      "unrelated-parent",
+      "parent-new",
+      2_000,
+    );
+    const unrelatedChild = winProcess(
+      162,
+      161,
+      "unrelated-child.exe",
+      "unrelated-child",
+      "child-new",
+      2_100,
+    );
+    const snapshots = [
+      [root, reusedParent, unrelatedChild],
+      [reusedParent, unrelatedChild],
+    ];
+    const result = await terminateAndAwaitWindowsProcessTree(
+      root.pid,
+      {
+        listProcesses: () => snapshots[Math.min(reads++, snapshots.length - 1)],
+        terminateTree: (pid) => {
+          forced.push(pid);
+          return { pid, status: 0, stdout: "SUCCESS", stderr: "" };
+        },
+        now: () => now,
+        sleep: async (ms) => {
+          now += ms;
+        },
+      },
+      {
+        gracefulMs: 0,
+        forcedMs: 10,
+        pollMs: 5,
+        initialProcesses: [root, oldChild],
+      },
+    );
+    expect(result.graceful).toBe(false);
+    expect(forced).toEqual([160]);
+    expect(result.knownProcesses.map((processInfo) => processInfo.pid)).toEqual([
+      160,
+      161,
+    ]);
+  });
+
+  test("persists ambiguous ancestry across a descendant handoff", async () => {
+    let now = 0;
+    let reads = 0;
+    const forced: number[] = [];
+    const root = winProcess(170, 1, "daemon.exe", "daemon", "root-old", 1_000);
+    const exitedParent = winProcess(
+      171,
+      170,
+      "old-child.exe",
+      "old-child",
+      "child-old",
+      1_100,
+    );
+    const ambiguousChild = winProcess(
+      172,
+      171,
+      "unknown-child.exe",
+      "unknown-child",
+      "unknown-child",
+      1_500,
+    );
+    const handoffChild = winProcess(
+      173,
+      172,
+      "handoff-child.exe",
+      "handoff-child",
+      "handoff-child",
+      1_600,
+    );
+    const snapshots = [[root, ambiguousChild], [handoffChild]];
+    await expect(
+      terminateAndAwaitWindowsProcessTree(
+        root.pid,
+        {
+          listProcesses: () => snapshots[Math.min(reads++, snapshots.length - 1)],
+          terminateTree: (pid) => {
+            forced.push(pid);
+            return { pid, status: 0, stdout: "SUCCESS", stderr: "" };
+          },
+          now: () => now,
+          sleep: async (ms) => {
+            now += ms;
+          },
+        },
+        {
+          gracefulMs: 0,
+          forcedMs: 10,
+          pollMs: 5,
+          initialProcesses: [root, exitedParent],
+        },
+      ),
+    ).rejects.toThrow(
+      /ancestry for daemon PID 170 became ambiguous[\s\S]*refusing to taskkill unproven descendants[\s\S]*PID 173/,
+    );
+    expect(forced).toEqual([170]);
+  });
+
+  test("reports a genuine process leak instead of treating taskkill as success", async () => {
+    let now = 0;
+    const root = winProcess(
+      200,
+      1,
+      "node.exe",
+      "node tui-drive.ts __win-daemon --cwd C:\\locked-project",
+    );
+    await expect(
+      terminateAndAwaitWindowsProcessTree(
+        root.pid,
+        {
+          listProcesses: () => [root],
+          terminateTree: (pid) => ({
+            pid,
+            status: 1,
+            stdout: "",
+            stderr: "Access is denied.",
+          }),
+          now: () => now,
+          sleep: async (ms) => {
+            now += ms;
+          },
+        },
+        {
+          gracefulMs: 5,
+          forcedMs: 10,
+          pollMs: 5,
+          initialProcesses: [root],
+        },
+      ),
+    ).rejects.toThrow(
+      /PID 200 PPID 1 node\.exe :: node tui-drive\.ts __win-daemon[\s\S]*Access is denied/,
+    );
+  });
+
+  test("surfaces a timed-out taskkill as a bounded teardown failure", async () => {
+    let now = 0;
+    const root = winProcess(210, 1, "node.exe", "tui-drive.ts __win-daemon");
+    await expect(
+      terminateAndAwaitWindowsProcessTree(
+        root.pid,
+        {
+          listProcesses: () => [root],
+          terminateTree: (pid) => ({
+            pid,
+            status: null,
+            stdout: "",
+            stderr: "",
+            error: "spawnSync taskkill ETIMEDOUT",
+          }),
+          now: () => now,
+          sleep: async (ms) => {
+            now += ms;
+          },
+        },
+        {
+          gracefulMs: 0,
+          forcedMs: 10,
+          pollMs: 5,
+          initialProcesses: [root],
+        },
+      ),
+    ).rejects.toThrow(/remained alive[\s\S]*taskkill PID 210[\s\S]*ETIMEDOUT/);
+  });
+
+  test("retries bounded transient EBUSY cleanup and then succeeds", () => {
+    let attempts = 0;
+    const waits: number[] = [];
+    removeTuiProjectTreeWithRetry("C:\\temp\\project", {
+      attempts: 4,
+      waitMs: 25,
+      remove: () => {
+        attempts++;
+        if (attempts < 3) {
+          const error = new Error("locked") as NodeJS.ErrnoException;
+          error.code = "EBUSY";
+          throw error;
+        }
+      },
+      sleep: (ms) => waits.push(ms),
+    });
+    expect(attempts).toBe(3);
+    expect(waits).toEqual([25, 25]);
+  });
+
+  test("does not retry non-transient cleanup errors", () => {
+    let attempts = 0;
+    expect(() =>
+      removeTuiProjectTreeWithRetry("C:\\temp\\project", {
+        attempts: 5,
+        remove: () => {
+          attempts++;
+          const error = new Error("permission policy") as NodeJS.ErrnoException;
+          error.code = "EACCES";
+          throw error;
+        },
+        sleep: () => {
+          throw new Error("must not wait");
+        },
+      })
+    ).toThrow("permission policy");
+    expect(attempts).toBe(1);
+  });
+
+  test("bounded EBUSY exhaustion includes process diagnostics", () => {
+    let attempts = 0;
+    expect(() =>
+      removeTuiProjectTreeWithRetry("C:\\temp\\project", {
+        attempts: 3,
+        waitMs: 1,
+        remove: () => {
+          attempts++;
+          const error = new Error("still locked") as NodeJS.ErrnoException;
+          error.code = "EBUSY";
+          throw error;
+        },
+        sleep: () => {},
+        diagnostics: () =>
+          "PID 300 PPID 1 node.exe :: tui-drive.ts __win-daemon --cwd C:\\temp\\project",
+      })
+    ).toThrow(
+      /exhausted 3 attempt\(s\)[\s\S]*PID 300 PPID 1 node\.exe :: tui-drive\.ts __win-daemon/,
+    );
+    expect(attempts).toBe(3);
+  });
+
+  test("pending session metadata blocks workspace removal even without a lock", () => {
+    const project = mkdtempSync(join(tmpdir(), "aidlc-pending-cleanup-"));
+    const session = `aidlc_pending_${process.pid}_${Date.now()}`;
+    const sessionDir = join(tmpdir(), "tui-drive", session);
+    mkdirSync(sessionDir, { recursive: true });
+    writeFileSync(
+      join(sessionDir, "meta.json"),
+      JSON.stringify({
+        session,
+        cwd: project,
+        daemonToken: "pending-token",
+        driverPath: "C:\\repo\\tests\\harness\\tui-drive.ts",
+      }),
+    );
+    writeFileSync(join(sessionDir, "pid"), "not-a-pid");
+    try {
+      expect(pendingTuiSessionsForProject(project)).toEqual([
+        {
+          name: session,
+          identity: {
+            session,
+            daemonToken: "pending-token",
+            driverPath: "C:\\repo\\tests\\harness\\tui-drive.ts",
+            recordedPid: undefined,
+          },
+        },
+      ]);
+      expect(() => cleanupTuiProject(project)).toThrow(
+        /teardown did not complete[\s\S]*process diagnostics/,
+      );
+      expect(existsSync(project)).toBe(true);
+    } finally {
+      rmSync(sessionDir, { recursive: true, force: true });
+      rmSync(project, { recursive: true, force: true });
+    }
+  });
+
+  test("nonzero kill remains a journey failure when workspace cleanup succeeds", () => {
+    const project = mkdtempSync(join(tmpdir(), "aidlc-kill-propagation-"));
+    expect(() =>
+      cleanupTuiProjectAfterKill(project, "session-failed", {
+        rc: 9,
+        stdout: "",
+        stderr: "surviving process diagnostics",
+      })
+    ).toThrow(
+      /kill failed for session 'session-failed' \(rc=9\)[\s\S]*surviving process diagnostics/,
+    );
+    expect(existsSync(project)).toBe(false);
+  });
+
+  test("pending-session audit accepts an explicit isolated session root", () => {
+    const project = mkdtempSync(join(tmpdir(), "aidlc-session-audit-project-"));
+    const sessionsRoot = mkdtempSync(join(tmpdir(), "aidlc-session-audit-root-"));
+    const sessionDir = join(sessionsRoot, "session-missing-pid");
+    mkdirSync(sessionDir);
+    writeFileSync(
+      join(sessionDir, "meta.json"),
+      JSON.stringify({ cwd: project, session: "session-missing-pid" }),
+    );
+    try {
+      expect(() =>
+        assertNoPendingTuiSessionsForProject(project, sessionsRoot)
+      ).toThrow(/session-missing-pid/);
+    } finally {
+      rmSync(sessionsRoot, { recursive: true, force: true });
+      rmSync(project, { recursive: true, force: true });
+    }
   });
 });
 

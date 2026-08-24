@@ -56,7 +56,11 @@ import { existsSync, readFileSync } from "node:fs";
 import * as os from "node:os";
 import { join } from "node:path";
 import { resolveWinNode } from "../harness/tui-drive.ts";
-import { AIDLC_SRC, cleanupTuiProject, setupTuiProject } from "../harness/tui-fixtures.ts";
+import {
+  AIDLC_SRC,
+  cleanupTuiProjectAfterKill,
+  setupTuiProject,
+} from "../harness/tui-fixtures.ts";
 
 const DRIVER = join(import.meta.dir, "..", "harness", "tui-drive.ts");
 const FIXTURE = join(import.meta.dir, "..", "fixtures", "state-mid-ideation.md");
@@ -172,8 +176,11 @@ function captureOrientationStatusline(): string {
     }
     return pane;
   } finally {
-    drive(["kill", "--session", session]);
-    cleanupTuiProject(sandbox);
+    cleanupTuiProjectAfterKill(
+      sandbox,
+      session,
+      drive(["kill", "--session", session]),
+    );
   }
 }
 

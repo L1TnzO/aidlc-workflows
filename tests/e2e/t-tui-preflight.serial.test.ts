@@ -40,11 +40,12 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync } from "node:fs";
 import * as os from "node:os";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { resolveWinNode } from "../harness/tui-drive.ts";
+import { cleanupTuiProjectAfterKill } from "../harness/tui-fixtures.ts";
 
 // ---------------------------------------------------------------------------
 // Locate the driver + pick the runtime per platform (§2.1, D-TUI-7).
@@ -184,8 +185,11 @@ describe("t-tui-preflight (terminal substrate capability gate)", () => {
         expect(captured.rc).toBe(0);
         expect(captured.stdout).toContain(SENTINEL);
       } finally {
-        drive(["kill", "--session", session]);
-        if (existsSync(sandbox)) rmSync(sandbox, { recursive: true, force: true });
+        cleanupTuiProjectAfterKill(
+          sandbox,
+          session,
+          drive(["kill", "--session", session]),
+        );
       }
     },
   );

@@ -118,6 +118,7 @@
 // Exit codes: 0 success, 1 wait-timeout / assertion miss, 2 usage/spawn error.
 
 import { spawn, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
   appendFileSync,
   existsSync,
@@ -138,6 +139,13 @@ const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_STABLE_MS = 600;
 const DEFAULT_TUI_SETTING_SOURCES = "project";
 const DEFAULT_ANSWER_GATE_TRACE_POLL_MS = 10_000;
+const WINDOWS_GRACEFUL_TEARDOWN_MS = 1_500;
+const WINDOWS_FORCED_TEARDOWN_MS = 5_000;
+const WINDOWS_PROCESS_POLL_MS = 250;
+const WINDOWS_SESSION_CLEANUP_ATTEMPTS = 20;
+const WINDOWS_SESSION_CLEANUP_WAIT_MS = 100;
+const WINDOWS_PROCESS_COMMAND_TIMEOUT_MS = 5_000;
+const RETRYABLE_WINDOWS_RM_CODES = new Set(["EBUSY", "ENOTEMPTY", "EPERM"]);
 
 type Args = {
   positionals: string[];
@@ -325,6 +333,628 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+export interface WindowsProcessInfo {
+  pid: number;
+  parentPid: number;
+  name: string;
+  commandLine: string;
+  creationDate: string;
+  creationTimeMs?: number;
+}
+
+export interface WindowsProcessTerminationResult {
+  pid: number;
+  status: number | null;
+  stdout: string;
+  stderr: string;
+  error?: string;
+}
+
+export interface WindowsProcessTreeOps {
+  listProcesses: () => WindowsProcessInfo[];
+  terminateTree: (pid: number) => WindowsProcessTerminationResult;
+  now: () => number;
+  sleep: (ms: number) => Promise<void>;
+}
+
+export interface WindowsProcessTreeOptions {
+  gracefulMs?: number;
+  forcedMs?: number;
+  pollMs?: number;
+  initialProcesses?: WindowsProcessInfo[];
+}
+
+export interface WindowsProcessTreeTeardown {
+  rootPid: number;
+  graceful: boolean;
+  elapsedMs: number;
+  knownProcesses: WindowsProcessInfo[];
+  forced: WindowsProcessTerminationResult[];
+}
+
+export interface WindowsDaemonIdentity {
+  session: string;
+  daemonToken?: string;
+  driverPath?: string;
+  recordedPid?: number;
+}
+
+export interface WindowsDaemonResolution {
+  daemon?: WindowsProcessInfo;
+  stalePidProcess?: WindowsProcessInfo;
+  initialProcesses: WindowsProcessInfo[];
+}
+
+function parseWindowsProcessSnapshot(raw: string): WindowsProcessInfo[] {
+  const text = raw.replace(/^\uFEFF/, "").trim();
+  if (!text) return [];
+  const parsed = JSON.parse(text) as unknown;
+  const rows = Array.isArray(parsed) ? parsed : [parsed];
+  const out: WindowsProcessInfo[] = [];
+  for (const row of rows) {
+    if (typeof row !== "object" || row === null) continue;
+    const rec = row as Record<string, unknown>;
+    const pid = Number(rec.pid ?? rec.ProcessId);
+    const parentPid = Number(rec.parentPid ?? rec.ParentProcessId);
+    if (!Number.isInteger(pid) || pid <= 0 || !Number.isInteger(parentPid)) continue;
+    out.push({
+      pid,
+      parentPid,
+      name: String(rec.name ?? rec.Name ?? ""),
+      commandLine: String(rec.commandLine ?? rec.CommandLine ?? ""),
+      creationDate: String(rec.creationDate ?? rec.CreationDate ?? ""),
+      creationTimeMs: Number.isFinite(Number(rec.creationTimeMs ?? rec.CreationTimeMs))
+        ? Number(rec.creationTimeMs ?? rec.CreationTimeMs)
+        : undefined,
+    });
+  }
+  return out;
+}
+
+function listWindowsProcesses(): WindowsProcessInfo[] {
+  const script = [
+    "$ErrorActionPreference = 'Stop'",
+    "$items = @(Get-CimInstance Win32_Process | ForEach-Object {",
+    "  [pscustomobject]@{",
+    "    pid = [int]$_.ProcessId",
+    "    parentPid = [int]$_.ParentProcessId",
+    "    name = [string]$_.Name",
+    "    commandLine = [string]$_.CommandLine",
+    "    creationDate = [string]$_.CreationDate",
+    "    creationTimeMs = ([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds()",
+    "  }",
+    "})",
+    "ConvertTo-Json -Compress -Depth 3 -InputObject $items",
+  ].join("\n");
+  const result = spawnSync(
+    "powershell.exe",
+    ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", script],
+    {
+      encoding: "utf8",
+      windowsHide: true,
+      maxBuffer: 20 * 1024 * 1024,
+      timeout: WINDOWS_PROCESS_COMMAND_TIMEOUT_MS,
+    },
+  );
+  if (result.error || result.status !== 0) {
+    throw new Error(
+      "could not enumerate Windows processes: " +
+        (result.error?.message || result.stderr?.trim() || `exit ${result.status}`),
+    );
+  }
+  try {
+    return parseWindowsProcessSnapshot(result.stdout ?? "");
+  } catch (error) {
+    throw new Error(
+      `could not parse Windows process snapshot: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+}
+
+function forceTerminateWindowsProcessTree(pid: number): WindowsProcessTerminationResult {
+  const result = spawnSync("taskkill", ["/F", "/T", "/PID", String(pid)], {
+    encoding: "utf8",
+    windowsHide: true,
+    timeout: WINDOWS_PROCESS_COMMAND_TIMEOUT_MS,
+  });
+  return {
+    pid,
+    status: result.status,
+    stdout: result.stdout?.trim() ?? "",
+    stderr: result.stderr?.trim() ?? "",
+    error: result.error
+      ? `${result.error.message}${
+        (result.error as NodeJS.ErrnoException).code
+          ? ` (${(result.error as NodeJS.ErrnoException).code})`
+          : ""
+      }`
+      : undefined,
+  };
+}
+
+function sameWindowsProcess(
+  expected: WindowsProcessInfo,
+  current: WindowsProcessInfo,
+): boolean {
+  if (expected.pid !== current.pid) return false;
+  if (expected.creationDate && current.creationDate) {
+    return expected.creationDate === current.creationDate;
+  }
+  return true;
+}
+
+function processCreatedByCurrentParent(
+  child: WindowsProcessInfo,
+  parent: WindowsProcessInfo,
+): boolean {
+  return (
+    child.creationTimeMs !== undefined &&
+    parent.creationTimeMs !== undefined &&
+    child.creationTimeMs >= parent.creationTimeMs
+  );
+}
+
+function processPredatesParent(
+  child: WindowsProcessInfo,
+  parent: WindowsProcessInfo,
+): boolean {
+  return (
+    child.creationTimeMs !== undefined &&
+    parent.creationTimeMs !== undefined &&
+    child.creationTimeMs < parent.creationTimeMs
+  );
+}
+
+export function collectWindowsProcessTree(
+  processes: WindowsProcessInfo[],
+  rootPids: Iterable<number>,
+): WindowsProcessInfo[] {
+  const members = new Set(rootPids);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const processInfo of processes) {
+      if (members.has(processInfo.pid) || !members.has(processInfo.parentPid)) {
+        continue;
+      }
+      members.add(processInfo.pid);
+      changed = true;
+    }
+  }
+  return processes.filter((processInfo) => members.has(processInfo.pid));
+}
+
+function collectCreationValidatedProcessTree(
+  processes: WindowsProcessInfo[],
+  root: WindowsProcessInfo,
+): {
+  processes: WindowsProcessInfo[];
+  ambiguous: WindowsProcessInfo[];
+} {
+  const members = new Map<number, WindowsProcessInfo>([[root.pid, root]]);
+  const rejected = new Set<number>();
+  const ambiguousRoots: number[] = [];
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const processInfo of processes) {
+      if (
+        members.has(processInfo.pid) ||
+        rejected.has(processInfo.pid) ||
+        ambiguousRoots.includes(processInfo.pid)
+      ) {
+        continue;
+      }
+      const parent = members.get(processInfo.parentPid);
+      if (!parent) continue;
+      if (
+        processInfo.creationTimeMs === undefined ||
+        parent.creationTimeMs === undefined
+      ) {
+        ambiguousRoots.push(processInfo.pid);
+        continue;
+      }
+      if (processPredatesParent(processInfo, parent)) {
+        // This process predates the current same-PID parent and therefore cannot
+        // belong to its process tree.
+        rejected.add(processInfo.pid);
+        continue;
+      }
+      members.set(processInfo.pid, processInfo);
+      changed = true;
+    }
+  }
+  return {
+    processes: processes.filter((processInfo) => members.has(processInfo.pid)),
+    ambiguous: collectWindowsProcessTree(processes, ambiguousRoots),
+  };
+}
+
+function formatWindowsProcessDiagnostics(processes: WindowsProcessInfo[]): string {
+  if (processes.length === 0) return "(none)";
+  return processes
+    .sort((a, b) => a.pid - b.pid)
+    .map((processInfo) => {
+      const command = processInfo.commandLine.replace(/\s+/g, " ").trim();
+      return `PID ${processInfo.pid} PPID ${processInfo.parentPid} ${processInfo.name}` +
+        `${command ? ` :: ${command}` : ""}`;
+    })
+    .join("\n");
+}
+
+function commandLineFlagMatches(
+  commandLine: string,
+  flag: string,
+  value: string,
+): boolean {
+  const escaped = value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(
+    `(?:^|\\s)${flag}(?:\\s+|=)(?:"${escaped}"|'${escaped}'|${escaped})(?=\\s|$)`,
+    "i",
+  ).test(commandLine);
+}
+
+export function matchesWindowsDaemonIdentity(
+  processInfo: WindowsProcessInfo,
+  identity: WindowsDaemonIdentity,
+): boolean {
+  const commandLine = processInfo.commandLine;
+  if (!/(?:^|\s)__win-daemon(?:\s|$)/i.test(commandLine)) return false;
+  if (!commandLineFlagMatches(commandLine, "--session", identity.session)) return false;
+  if (
+    identity.daemonToken &&
+    !commandLineFlagMatches(commandLine, "--daemon-token", identity.daemonToken)
+  ) {
+    return false;
+  }
+  if (identity.driverPath) {
+    const normalize = (value: string): string =>
+      value.replaceAll("\\", "/").toLowerCase();
+    if (!normalize(commandLine).includes(normalize(identity.driverPath))) return false;
+  }
+  return true;
+}
+
+export function resolveWindowsDaemonIdentity(
+  processes: WindowsProcessInfo[],
+  identity: WindowsDaemonIdentity,
+): WindowsDaemonResolution {
+  const candidates = processes.filter((processInfo) =>
+    matchesWindowsDaemonIdentity(processInfo, identity)
+  );
+  if (candidates.length > 1) {
+    throw new Error(
+      `multiple Windows TUI daemons match session '${identity.session}'; ` +
+        `refusing ambiguous teardown:\n${formatWindowsProcessDiagnostics(candidates)}`,
+    );
+  }
+
+  const recordedProcess = identity.recordedPid === undefined
+    ? undefined
+    : processes.find((processInfo) => processInfo.pid === identity.recordedPid);
+  const daemon = candidates[0];
+  if (!daemon && identity.recordedPid === undefined) {
+    throw new Error(
+      `Windows TUI session '${identity.session}' has missing/corrupt PID metadata ` +
+        `and no token-bound daemon could be proven absent; refusing cleanup`,
+    );
+  }
+  if (!daemon && recordedProcess) {
+    throw new Error(
+      `PID metadata for Windows TUI session '${identity.session}' points to a ` +
+        `non-daemon process; refusing taskkill:\n` +
+        formatWindowsProcessDiagnostics([recordedProcess]),
+    );
+  }
+  const initial = daemon
+    ? collectCreationValidatedProcessTree(processes, daemon)
+    : { processes: [], ambiguous: [] };
+  if (initial.ambiguous.length > 0) {
+    throw new Error(
+      `initial Windows process ancestry for session '${identity.session}' is ` +
+        `ambiguous; refusing teardown:\n` +
+        formatWindowsProcessDiagnostics(initial.ambiguous),
+    );
+  }
+
+  return {
+    daemon,
+    stalePidProcess:
+      daemon && recordedProcess && daemon.pid !== recordedProcess.pid
+        ? recordedProcess
+        : undefined,
+    initialProcesses: initial.processes,
+  };
+}
+
+function formatWindowsTerminationDiagnostics(
+  results: WindowsProcessTerminationResult[],
+): string {
+  if (results.length === 0) return "(no taskkill attempts)";
+  return results
+    .map((result) => {
+      const detail = result.error || result.stderr || result.stdout || "(no output)";
+      return `taskkill PID ${result.pid} exit ${String(result.status)} :: ${detail}`;
+    })
+    .join("\n");
+}
+
+const DEFAULT_WINDOWS_PROCESS_TREE_OPS: WindowsProcessTreeOps = {
+  listProcesses: listWindowsProcesses,
+  terminateTree: forceTerminateWindowsProcessTree,
+  now: () => Date.now(),
+  sleep,
+};
+
+/**
+ * Wait for a Windows daemon and every descendant discovered from its PID to
+ * exit. A graceful window lets the daemon close node-pty/ConPTY itself; taskkill
+ * is the bounded backstop. The function succeeds only after every known process
+ * identity is absent, so a surviving child remains a visible teardown failure.
+ */
+export async function terminateAndAwaitWindowsProcessTree(
+  rootPid: number,
+  ops: WindowsProcessTreeOps = DEFAULT_WINDOWS_PROCESS_TREE_OPS,
+  options: WindowsProcessTreeOptions = {},
+): Promise<WindowsProcessTreeTeardown> {
+  const gracefulMs = options.gracefulMs ?? WINDOWS_GRACEFUL_TEARDOWN_MS;
+  const forcedMs = options.forcedMs ?? WINDOWS_FORCED_TEARDOWN_MS;
+  const pollMs = options.pollMs ?? WINDOWS_PROCESS_POLL_MS;
+  const startedAt = ops.now();
+  const known = new Map<number, WindowsProcessInfo>();
+  const ambiguousKnown = new Map<number, WindowsProcessInfo>();
+  const forced: WindowsProcessTerminationResult[] = [];
+  const forcedPids = new Set<number>();
+  const initialRoot = options.initialProcesses?.find(
+    (processInfo) => processInfo.pid === rootPid,
+  );
+  if (!initialRoot) {
+    throw new Error(
+      `Windows process-tree teardown requires a validated identity for root PID ${rootPid}`,
+    );
+  }
+  const initial = collectCreationValidatedProcessTree(
+    options.initialProcesses ?? [],
+    initialRoot,
+  );
+  if (initial.ambiguous.length > 0) {
+    throw new Error(
+      `initial Windows process ancestry for daemon PID ${rootPid} is ambiguous; ` +
+        `refusing teardown:\n${formatWindowsProcessDiagnostics(initial.ambiguous)}`,
+    );
+  }
+  for (const processInfo of initial.processes) {
+    known.set(processInfo.pid, processInfo);
+  }
+
+  const refresh = (): {
+    alive: WindowsProcessInfo[];
+    ambiguous: WindowsProcessInfo[];
+  } => {
+    const snapshot = ops.listProcesses();
+    const currentByPid = new Map(snapshot.map((processInfo) => [processInfo.pid, processInfo]));
+    const provenPids = new Set<number>();
+    for (const processInfo of known.values()) {
+      const current = currentByPid.get(processInfo.pid);
+      if (current && sameWindowsProcess(processInfo, current)) {
+        provenPids.add(processInfo.pid);
+      }
+    }
+
+    // Discover new descendants only through a currently identity-matching
+    // parent. Historical PID numbers are never ancestry roots after reuse.
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const processInfo of snapshot) {
+        if (provenPids.has(processInfo.pid) || !provenPids.has(processInfo.parentPid)) {
+          continue;
+        }
+        const parent = currentByPid.get(processInfo.parentPid);
+        if (
+          !parent ||
+          processPredatesParent(processInfo, parent) ||
+          processInfo.creationTimeMs === undefined ||
+          parent.creationTimeMs === undefined
+        ) {
+          // Older children are unrelated. Missing creation data is handled by
+          // the ambiguity pass below rather than admitted to the kill tree.
+          continue;
+        }
+        known.set(processInfo.pid, processInfo);
+        ambiguousKnown.delete(processInfo.pid);
+        provenPids.add(processInfo.pid);
+        changed = true;
+      }
+    }
+
+    const ambiguousPids = new Set<number>();
+    for (const processInfo of ambiguousKnown.values()) {
+      const current = currentByPid.get(processInfo.pid);
+      if (current && sameWindowsProcess(processInfo, current)) {
+        ambiguousPids.add(processInfo.pid);
+      }
+    }
+
+    const expandAmbiguousDescendants = (): void => {
+      let expanded = true;
+      while (expanded) {
+        expanded = false;
+        for (const processInfo of snapshot) {
+          if (
+            known.has(processInfo.pid) ||
+            ambiguousPids.has(processInfo.pid) ||
+            !ambiguousPids.has(processInfo.parentPid)
+          ) {
+            continue;
+          }
+          ambiguousKnown.set(processInfo.pid, processInfo);
+          ambiguousPids.add(processInfo.pid);
+          expanded = true;
+        }
+      }
+    };
+    expandAmbiguousDescendants();
+
+    for (const processInfo of snapshot) {
+      if (
+        known.has(processInfo.pid) ||
+        provenPids.has(processInfo.pid) ||
+        ambiguousPids.has(processInfo.pid)
+      ) {
+        continue;
+      }
+      const priorParent =
+        known.get(processInfo.parentPid) ??
+        ambiguousKnown.get(processInfo.parentPid);
+      if (!priorParent) continue;
+      if (processPredatesParent(processInfo, priorParent)) {
+        // The process existed before this current same-PID parent identity.
+        continue;
+      }
+      const currentParent = currentByPid.get(processInfo.parentPid);
+      if (
+        currentParent &&
+        !sameWindowsProcess(priorParent, currentParent) &&
+        processCreatedByCurrentParent(processInfo, currentParent)
+      ) {
+        // This child was created after the reused parent identity, so neither
+        // process belongs to the teardown tree.
+        continue;
+      }
+      ambiguousKnown.set(processInfo.pid, processInfo);
+      ambiguousPids.add(processInfo.pid);
+    }
+    expandAmbiguousDescendants();
+
+    const alive = [...known.values()].filter((processInfo) => {
+      const current = currentByPid.get(processInfo.pid);
+      return current !== undefined && sameWindowsProcess(processInfo, current);
+    });
+    return {
+      alive,
+      ambiguous: [...ambiguousKnown.values()].filter((processInfo) => {
+        const current = currentByPid.get(processInfo.pid);
+        return current !== undefined && sameWindowsProcess(processInfo, current);
+      }),
+    };
+  };
+
+  let state = refresh();
+  const gracefulDeadline = startedAt + Math.max(0, gracefulMs);
+  while (state.alive.length > 0 && ops.now() < gracefulDeadline) {
+    await ops.sleep(pollMs);
+    state = refresh();
+  }
+  if (state.alive.length === 0 && state.ambiguous.length === 0) {
+    return {
+      rootPid,
+      graceful: true,
+      elapsedMs: ops.now() - startedAt,
+      knownProcesses: [...known.values()],
+      forced,
+    };
+  }
+
+  const forceDeadline = ops.now() + Math.max(0, forcedMs);
+  while (state.alive.length > 0 && ops.now() < forceDeadline) {
+    const root = state.alive.find((processInfo) => processInfo.pid === rootPid);
+    const targets = root
+      ? [root]
+      : state.alive.filter((processInfo) => !forcedPids.has(processInfo.pid));
+    for (const processInfo of targets) {
+      if (forcedPids.has(processInfo.pid)) continue;
+      forcedPids.add(processInfo.pid);
+      forced.push(ops.terminateTree(processInfo.pid));
+    }
+    await ops.sleep(pollMs);
+    state = refresh();
+  }
+
+  if (state.alive.length > 0) {
+    throw new Error(
+      `Windows process tree rooted at daemon PID ${rootPid} remained alive after ` +
+        `${ops.now() - startedAt}ms:\n${formatWindowsProcessDiagnostics(state.alive)}\n` +
+        `termination attempts:\n${formatWindowsTerminationDiagnostics(forced)}`,
+    );
+  }
+  if (state.ambiguous.length > 0) {
+    throw new Error(
+      `Windows process ancestry for daemon PID ${rootPid} became ambiguous; ` +
+        `refusing to taskkill unproven descendants:\n` +
+        formatWindowsProcessDiagnostics(state.ambiguous),
+    );
+  }
+
+  return {
+    rootPid,
+    graceful: false,
+    elapsedMs: ops.now() - startedAt,
+    knownProcesses: [...known.values()],
+    forced,
+  };
+}
+
+export function windowsProcessTreeDiagnostics(rootPids: number[]): string {
+  try {
+    const snapshot = listWindowsProcesses();
+    return formatWindowsProcessDiagnostics(
+      collectWindowsProcessTree(snapshot, rootPids),
+    );
+  } catch (error) {
+    return `(process enumeration failed: ${
+      error instanceof Error ? error.message : String(error)
+    })`;
+  }
+}
+
+export function windowsDaemonIdentityDiagnostics(
+  identities: WindowsDaemonIdentity[],
+): string {
+  try {
+    const snapshot = listWindowsProcesses();
+    const roots = new Set<number>();
+    for (const identity of identities) {
+      for (const processInfo of snapshot) {
+        if (
+          matchesWindowsDaemonIdentity(processInfo, identity) ||
+          processInfo.pid === identity.recordedPid
+        ) {
+          roots.add(processInfo.pid);
+        }
+      }
+    }
+    return formatWindowsProcessDiagnostics(
+      collectWindowsProcessTree(snapshot, roots),
+    );
+  } catch (error) {
+    return `(process enumeration failed: ${
+      error instanceof Error ? error.message : String(error)
+    })`;
+  }
+}
+
+async function removeWindowsSessionDir(path: string): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      rmSync(path, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (
+        !code ||
+        !RETRYABLE_WINDOWS_RM_CODES.has(code) ||
+        attempt >= WINDOWS_SESSION_CLEANUP_ATTEMPTS
+      ) {
+        throw error;
+      }
+      await sleep(WINDOWS_SESSION_CLEANUP_WAIT_MS);
+    }
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Backend contract (§2.3). Both backends satisfy the same five operations; the
 // CLI dispatch and the `wait` polling loop are backend-agnostic.
@@ -349,7 +979,7 @@ interface Backend {
   /** Current visible grid as text. ansi keeps colour escapes (tmux only). */
   capture(session: string, ansi: boolean): string;
   /** Kill the session (idempotent). */
-  kill(session: string): void;
+  kill(session: string): void | Promise<void>;
 }
 
 // ---------------------------------------------------------------------------
@@ -449,7 +1079,7 @@ const tmuxBackend: Backend = {
 //   <dir>/cmd.log   — append-only command log the daemon tails (send/kill).
 //   <dir>/grid.txt  — the latest reconstructed grid the daemon snapshots; the
 //                     capture/wait clients read it.
-//   <dir>/meta.json — { cols, rows } so a client can resize/diagnose.
+//   <dir>/meta.json — dimensions, cwd, command, and daemon identity token.
 //   <dir>/pid       — the daemon pid, for kill's force-terminate backstop.
 // The channels are deliberately dumb files (no named pipes / sockets) so the
 // same code runs anywhere a filesystem does.
@@ -468,10 +1098,9 @@ const win32Backend: Backend = {
 
     const dir = winSessionDir(session);
     // Idempotent start: tear down any stale daemon + channel dir first.
-    win32Backend.kill(session);
-    rmSync(dir, { recursive: true, force: true });
+    await win32Backend.kill(session);
+    await removeWindowsSessionDir(dir);
     mkdirSync(dir, { recursive: true });
-    writeFileSync(join(dir, "meta.json"), JSON.stringify({ cols: width, rows: height }));
 
     // Fork the daemon UNDER NODE (never bun — node-pty input wedges under bun,
     // microsoft/node-pty #748). We re-exec THIS file with the `__win-daemon`
@@ -490,6 +1119,19 @@ const win32Backend: Backend = {
       );
     }
     const selfPath = fileURLToPathSafe(import.meta.url);
+    const daemonToken = randomUUID();
+    writeFileSync(
+      join(dir, "meta.json"),
+      JSON.stringify({
+        session,
+        cols: width,
+        rows: height,
+        cwd,
+        command: cmd,
+        daemonToken,
+        driverPath: selfPath,
+      }),
+    );
     const child = spawn(
       nodeBin,
       [
@@ -498,6 +1140,8 @@ const win32Backend: Backend = {
         "__win-daemon",
         "--session",
         session,
+        "--daemon-token",
+        daemonToken,
         "--cwd",
         cwd,
         "--width",
@@ -540,9 +1184,59 @@ const win32Backend: Backend = {
     return readFileSync(gridPath, "utf8");
   },
 
-  kill(session) {
+  async kill(session) {
     const dir = winSessionDir(session);
     if (!existsSync(dir)) return;
+    // Snapshot the complete tree BEFORE asking the daemon to exit. Otherwise an
+    // intermediate process can disappear before the first poll and leave a
+    // descendant whose static ParentProcessId points at a PID we never observed.
+    const pidPath = join(dir, "pid");
+    let recordedPid: number | undefined;
+    try {
+      const raw = readFileSync(pidPath, "utf8").trim();
+      if (/^[1-9]\d*$/.test(raw)) recordedPid = Number(raw);
+    } catch {
+      // Missing/corrupt PID metadata is recovered from daemon identity below.
+    }
+    let meta: { daemonToken?: string; driverPath?: string } = {};
+    try {
+      meta = JSON.parse(readFileSync(join(dir, "meta.json"), "utf8")) as {
+        daemonToken?: string;
+        driverPath?: string;
+      };
+    } catch {
+      // Legacy/corrupt metadata still has session + current driver path identity.
+    }
+    const identity: WindowsDaemonIdentity = {
+      session,
+      daemonToken: meta.daemonToken,
+      driverPath: meta.driverPath ?? fileURLToPathSafe(import.meta.url),
+      recordedPid,
+    };
+    let resolution: WindowsDaemonResolution | undefined;
+    let identityError: unknown;
+    if (process.platform === "win32") {
+      try {
+        resolution = resolveWindowsDaemonIdentity(
+          listWindowsProcesses(),
+          identity,
+        );
+        if (resolution.stalePidProcess) {
+          writeTuiTrace(session, "kill_stale_pid_ignored", {
+            recordedPid,
+            daemonPid: resolution.daemon?.pid,
+            stalePidProcess: resolution.stalePidProcess,
+          });
+        }
+      } catch (error) {
+        identityError = error;
+        writeTuiTrace(session, "kill_identity_error", {
+          recordedPid,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+
     // 1) Ask the daemon to tear the pty down cleanly (it filters the ConPTY
     //    "Socket is closed" / AttachConsole teardown noise itself).
     try {
@@ -550,30 +1244,46 @@ const win32Backend: Backend = {
     } catch {
       // channel already gone — fall through to the force-kill backstop.
     }
+    if (identityError) {
+      throw new Error(
+        `cannot safely identify Windows TUI daemon for session '${session}': ` +
+          `${identityError instanceof Error ? identityError.message : String(identityError)}`,
+        { cause: identityError },
+      );
+    }
     // 2) Force-kill backstop: node-pty hangs on ConPTY teardown (p.kill() →
     //    "Socket is closed"), so never block on it. Hard-terminate the daemon
     //    pid after a short grace; the daemon's process.exit closes the pty.
-    const pidPath = join(dir, "pid");
-    if (existsSync(pidPath)) {
-      const pid = Number.parseInt(readFileSync(pidPath, "utf8").trim(), 10);
-      if (Number.isFinite(pid)) {
-        // Best-effort: SIGTERM, then the OS reaps. On Windows taskkill /F /PID
-        // is the reliable force-terminate (Stop-Process equivalent from the
-        // capture-v3 spike); on POSIX a plain kill suffices (this branch only
-        // runs on win32 in practice, but stays portable for local inspection).
-        if (process.platform === "win32") {
-          spawnSync("taskkill", ["/F", "/T", "/PID", String(pid)], {
-            stdio: "ignore",
-          });
-        } else {
-          try {
-            process.kill(pid, "SIGTERM");
-          } catch {
-            // already dead
-          }
+    const daemonPid = resolution?.daemon?.pid ?? recordedPid;
+    if (daemonPid !== undefined) {
+      if (process.platform === "win32") {
+        if (!resolution?.daemon) {
+          // A missing daemon plus an absent recorded process means it already
+          // exited. Never force-kill an unvalidated PID.
+          await removeWindowsSessionDir(dir);
+          return;
+        }
+        const result = await terminateAndAwaitWindowsProcessTree(
+          daemonPid,
+          DEFAULT_WINDOWS_PROCESS_TREE_OPS,
+          { initialProcesses: resolution.initialProcesses },
+        );
+        writeTuiTrace(session, "kill_complete", {
+          daemonPid,
+          graceful: result.graceful,
+          elapsedMs: result.elapsedMs,
+          knownProcesses: result.knownProcesses,
+          forced: result.forced,
+        });
+      } else {
+        try {
+          process.kill(daemonPid, "SIGTERM");
+        } catch {
+          // already dead
         }
       }
     }
+    await removeWindowsSessionDir(dir);
   },
 };
 
@@ -601,6 +1311,7 @@ function fileURLToPathSafe(url: string): string {
 
 async function runWinDaemon(a: Args): Promise<void> {
   const session = requireFlag(a, "session");
+  requireFlag(a, "daemon-token");
   const cwd = requireFlag(a, "cwd");
   const cols = Number(a.flags.width ?? "120");
   const rows = Number(a.flags.height ?? "40");
@@ -612,6 +1323,7 @@ async function runWinDaemon(a: Args): Promise<void> {
 
   const dir = winSessionDir(session);
   mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, "pid"), String(process.pid));
   const gridPath = join(dir, "grid.txt");
   const cmdLogPath = join(dir, "cmd.log");
 
@@ -686,25 +1398,52 @@ async function runWinDaemon(a: Args): Promise<void> {
   // Tail the command log for send/kill. We track the byte offset consumed so we
   // never re-process a record.
   let consumed = 0;
-  const teardown = (): void => {
+  let teardownRequested = false;
+  let finished = false;
+  let teardownTimer: ReturnType<typeof setTimeout> | undefined;
+  const finish = (reason: string): void => {
+    if (finished) return;
+    finished = true;
     clearInterval(snapTimer);
     snapshot(); // final grid
+    if (teardownTimer) clearTimeout(teardownTimer);
     try {
-      // node-pty hangs on ConPTY teardown; don't block. Best-effort kill, then
-      // hard-exit so the OS reaps the pty. Filter the AttachConsole stderr noise
-      // by simply not surfacing it.
-      child.kill();
+      term.dispose();
     } catch {
-      // "Socket is closed" / AttachConsole — expected on ConPTY teardown.
+      // xterm is already disposed
+    }
+    try {
+      writeFileSync(
+        join(dir, "closed.json"),
+        JSON.stringify({ pid: process.pid, reason, closedAt: new Date().toISOString() }),
+      );
+    } catch {
+      // The client may already be removing a stale channel dir.
     }
     process.exit(0);
   };
-
-  child.onExit(() => {
+  const teardown = (): void => {
+    if (teardownRequested) return;
+    teardownRequested = true;
     clearInterval(snapTimer);
     snapshot();
-    // Leave the grid in place so a final capture sees the end-state, then exit.
-    process.exit(0);
+    // Prefer node-pty's own exit event so its ConPTY handle closes before the
+    // daemon exits. If that event never arrives, leave the bounded force-kill
+    // decision to the client, but do not keep this daemon alive indefinitely.
+    teardownTimer = setTimeout(
+      () => finish("pty-exit-timeout"),
+      WINDOWS_GRACEFUL_TEARDOWN_MS,
+    );
+    try {
+      child.kill();
+    } catch {
+      // "Socket is closed" / AttachConsole means no exit event is forthcoming.
+      finish("pty-kill-threw");
+    }
+  };
+
+  child.onExit(() => {
+    finish(teardownRequested ? "teardown-child-exit" : "child-exit");
   });
 
   const pump = async (): Promise<void> => {
@@ -894,10 +1633,10 @@ function cmdCapture(backend: Backend, a: Args): void {
   process.stdout.write(screen);
 }
 
-function cmdKill(backend: Backend, a: Args): void {
+async function cmdKill(backend: Backend, a: Args): Promise<void> {
   const session = requireFlag(a, "session");
   writeTuiTrace(session, "kill", {});
-  backend.kill(session);
+  await backend.kill(session);
   process.stdout.write(`killed session '${session}'\n`);
 }
 

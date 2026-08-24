@@ -5,7 +5,7 @@
 // every platform by checking the files that make that run repeatable.
 
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { REPO_ROOT } from "../harness/fixtures.ts";
 
@@ -134,5 +134,35 @@ describe("t152 Windows portability guard", () => {
     expect(typeCheck).toContain('`${result.stdout ?? ""}${result.stderr ?? ""}`');
     expect(typeCheck).toContain("stdout.split(/\\r?\\n/)");
     expect(typeCheck).toContain("parseTscOutput(output)");
+  });
+
+  test("Windows process enumeration and taskkill are synchronously bounded", () => {
+    const driver = read("tests/harness/tui-drive.ts");
+    expect(driver).toContain("const WINDOWS_PROCESS_COMMAND_TIMEOUT_MS = 5_000");
+    expect(
+      driver.match(/timeout: WINDOWS_PROCESS_COMMAND_TIMEOUT_MS/g),
+    ).toHaveLength(2);
+  });
+
+  test("every TUI e2e cleanup propagates kill failures and avoids direct rmSync", () => {
+    const e2eDir = join(TESTS, "e2e");
+    const files = readdirSync(e2eDir)
+      .filter((name) => /^t-tui.*\.test\.ts$/.test(name))
+      .sort();
+    expect(files.length).toBeGreaterThan(0);
+    for (const name of files) {
+      const body = readFileSync(join(e2eDir, name), "utf8");
+      expect(body, name).not.toMatch(/\brmSync\s*\(/);
+      expect(body, name).not.toMatch(
+        /^\s*drive\(\["kill"[^\n]*\]\);\s*$/m,
+      );
+      if (body.includes('drive(["kill"')) {
+        expect(
+          body.includes("cleanupTuiProjectAfterKill") ||
+            body.includes("assertTuiDriveKill"),
+          name,
+        ).toBe(true);
+      }
+    }
   });
 });

@@ -41,6 +41,10 @@ import {
 } from "../../dist/claude/.claude/tools/aidlc-lib.ts";
 import { seedCustomHarness } from "./custom-harness.ts";
 import {
+  type WindowsDaemonIdentity,
+  windowsDaemonIdentityDiagnostics,
+} from "./tui-drive.ts";
+import {
   DEFAULT_INTENT_UUID,
   DEFAULT_RECORD_DIR,
   DEFAULT_SPACE,
@@ -67,6 +71,9 @@ const FIXTURES_DIR = join(REPO_ROOT, "tests", "fixtures");
 const CLAUDE_MEMORY_SRC = join(REPO_ROOT, "dist", "claude", "aidlc");
 const KIRO_MEMORY_SRC = join(REPO_ROOT, "dist", "kiro", "aidlc");
 const KIRO_IDE_MEMORY_SRC = join(REPO_ROOT, "dist", "kiro-ide", "aidlc");
+const RETRYABLE_TUI_CLEANUP_CODES = new Set(["EBUSY", "ENOTEMPTY", "EPERM"]);
+const WINDOWS_TUI_CLEANUP_ATTEMPTS = 20;
+const WINDOWS_TUI_CLEANUP_WAIT_MS = 250;
 
 export function markdownH2Section(body: string, heading: string): string {
   const lines = body.split(/\r?\n/);
@@ -630,10 +637,202 @@ function copyDirContents(src: string, dest: string): void {
  *  mkdtemp name, cleaned in `finally`), so a debugging run sets this to keep the
  *  seeded .claude/, the written artefacts, the audit, and the sensor detail dir
  *  for post-mortem. Green CI never sets it, so normal runs still clean up. */
+export interface TuiProjectCleanupOptions {
+  attempts?: number;
+  waitMs?: number;
+  remove?: (path: string) => void;
+  sleep?: (ms: number) => void;
+  diagnostics?: (path: string) => string;
+}
+
+export interface TuiDriveRunResult {
+  rc: number;
+  stdout?: string;
+  stderr?: string;
+}
+
+export interface PendingTuiSession {
+  name: string;
+  identity: WindowsDaemonIdentity;
+}
+
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function sameWindowsPath(a: string, b: string): boolean {
+  const normalize = (value: string): string =>
+    value.replaceAll("\\", "/").replace(/\/+$/, "").toLowerCase();
+  return normalize(a) === normalize(b);
+}
+
+export function pendingTuiSessionsForProject(
+  proj: string,
+  sessionsRoot = join(tmpdir(), "tui-drive"),
+): PendingTuiSession[] {
+  const sessions: PendingTuiSession[] = [];
+  try {
+    for (const name of existsSync(sessionsRoot) ? readdirSync(sessionsRoot) : []) {
+      const dir = join(sessionsRoot, name);
+      const metaPath = join(dir, "meta.json");
+      const pidPath = join(dir, "pid");
+      if (!existsSync(metaPath)) continue;
+      try {
+        const meta = JSON.parse(readFileSync(metaPath, "utf8")) as {
+          cwd?: string;
+          session?: string;
+          daemonToken?: string;
+          driverPath?: string;
+        };
+        if (!meta.cwd || !sameWindowsPath(meta.cwd, proj)) continue;
+        let recordedPid: number | undefined;
+        try {
+          const raw = readFileSync(pidPath, "utf8").trim();
+          if (/^[1-9]\d*$/.test(raw)) recordedPid = Number(raw);
+        } catch {
+          // Missing/corrupt PID metadata is part of the pending-session evidence.
+        }
+        sessions.push({
+          name,
+          identity: {
+            session: meta.session ?? name,
+            daemonToken: meta.daemonToken,
+            driverPath: meta.driverPath,
+            recordedPid,
+          },
+        });
+      } catch {
+        // A concurrently closing session can remove or truncate its metadata.
+      }
+    }
+  } catch (error) {
+    throw new Error(
+      `could not inspect tui-drive sessions: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+      { cause: error },
+    );
+  }
+  return sessions;
+}
+
+function windowsTuiCleanupDiagnostics(proj: string): string {
+  let sessions: PendingTuiSession[];
+  try {
+    sessions = pendingTuiSessionsForProject(proj);
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error);
+  }
+  if (sessions.length === 0) {
+    return "no matching tui-drive session metadata remained";
+  }
+  return [
+    `matching sessions: ${sessions.map((session) =>
+      `${session.name}=${session.identity.recordedPid ?? "missing-pid"}`
+    ).join(", ")}`,
+    windowsDaemonIdentityDiagnostics(
+      sessions.map((session) => session.identity),
+    ),
+  ].join("\n");
+}
+
+export function assertNoPendingTuiSessionsForProject(
+  proj: string,
+  sessionsRoot?: string,
+): void {
+  const sessions = pendingTuiSessionsForProject(proj, sessionsRoot);
+  if (sessions.length === 0) return;
+  throw new Error(
+    `cleanupTuiProject refusing to remove ${proj}: tui-drive teardown did not ` +
+      `complete for ${sessions.map((session) => session.name).join(", ")}\n` +
+      `process diagnostics:\n${windowsDaemonIdentityDiagnostics(
+        sessions.map((session) => session.identity),
+      )}`,
+  );
+}
+
+export function removeTuiProjectTreeWithRetry(
+  proj: string,
+  options: TuiProjectCleanupOptions = {},
+): void {
+  const attempts = options.attempts ??
+    (process.platform === "win32" ? WINDOWS_TUI_CLEANUP_ATTEMPTS : 1);
+  const waitMs = options.waitMs ?? WINDOWS_TUI_CLEANUP_WAIT_MS;
+  const remove = options.remove ??
+    ((path: string) => rmSync(path, { recursive: true, force: true }));
+  const wait = options.sleep ?? sleepSync;
+  const diagnostics = options.diagnostics ?? windowsTuiCleanupDiagnostics;
+
+  for (let attempt = 1; ; attempt++) {
+    try {
+      remove(proj);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      const retryable =
+        typeof code === "string" && RETRYABLE_TUI_CLEANUP_CODES.has(code);
+      if (!retryable) throw error;
+      if (attempt >= attempts) {
+        const detail = error instanceof Error ? error.message : String(error);
+        const wrapped = new Error(
+          `cleanupTuiProject exhausted ${attempts} attempt(s) removing ${proj}: ` +
+            `${code}: ${detail}\nprocess diagnostics:\n${diagnostics(proj)}`,
+          { cause: error },
+        ) as NodeJS.ErrnoException;
+        wrapped.code = code;
+        throw wrapped;
+      }
+      wait(waitMs);
+    }
+  }
+}
+
 export function cleanupTuiProject(proj: string): void {
   if (process.env.AIDLC_KEEP_TEMP === "1") {
     if (proj) process.stderr.write(`[tui-fixtures] AIDLC_KEEP_TEMP=1 — preserved ${proj}\n`);
     return;
   }
-  if (proj && existsSync(proj)) rmSync(proj, { recursive: true, force: true });
+  if (proj) assertNoPendingTuiSessionsForProject(proj);
+  if (proj && existsSync(proj)) removeTuiProjectTreeWithRetry(proj);
+}
+
+export function assertTuiDriveKill(
+  result: TuiDriveRunResult,
+  session: string,
+): void {
+  if (result.rc === 0) return;
+  const stderr = result.stderr?.trim() ?? "";
+  throw new Error(
+    `tui-drive kill failed for session '${session}' (rc=${result.rc})` +
+      `${stderr ? `\n${stderr}` : ""}`,
+  );
+}
+
+export function cleanupTuiProjectAfterKill(
+  proj: string,
+  session: string,
+  result: TuiDriveRunResult,
+): void {
+  let cleanupError: unknown;
+  try {
+    cleanupTuiProject(proj);
+  } catch (error) {
+    cleanupError = error;
+  }
+  const stderr = result.stderr?.trim() ?? "";
+  if (result.rc !== 0) {
+    throw new Error(
+      `tui-drive kill failed for session '${session}' (rc=${result.rc})` +
+        `${stderr ? `\n${stderr}` : ""}` +
+        `${
+          cleanupError
+            ? `\nworkspace cleanup also failed: ${
+              cleanupError instanceof Error ? cleanupError.message : String(cleanupError)
+            }`
+            : ""
+        }`,
+      { cause: cleanupError ?? undefined },
+    );
+  }
+  if (cleanupError) throw cleanupError;
 }
