@@ -3596,11 +3596,25 @@ export function rebuildIndex(projectDir: string, space: string): DocumentIndex {
   for (const [sourcePath, rows] of liveByPath) {
     if (rows.length < 2) continue;
     let currentDigest: string | null = null;
-    if (docsReal !== null && rows.some((row) => row.source.kind === "managed")) {
-      try {
-        const abs = join(knowledgeDir(projectDir, space), sourcePath.split("/").join(sep));
-        currentDigest = sha256Hex(readCandidate(docsReal, abs));
-      } catch { /* absent/refused source gives no preferred digest */ }
+    if (
+      docsReal !== null &&
+      rows.some((row) => row.source.kind === "managed") &&
+      sourcePath.startsWith("documents/")
+    ) {
+      const abs = join(
+        docsReal,
+        sourcePath.slice("documents/".length).split("/").join(sep),
+      );
+      if (existsSync(abs)) {
+        try {
+          currentDigest = sha256Hex(readCandidate(docsReal, abs));
+        } catch (e) {
+          throw new Error(
+            `cannot choose among duplicate records for ${sourcePath} while rebuilding the index: ` +
+              errorMessage(e),
+          );
+        }
+      }
     }
     rows.sort((a, b) => {
       const aMatches = currentDigest !== null && a.sha256 === currentDigest;

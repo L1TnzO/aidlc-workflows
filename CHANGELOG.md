@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.77] - 2026-08-24
+
+Knowledge index recovery now selects duplicate records against the live managed source even when the project path traverses a symlink, and refuses present sources that cannot be safely read. **Upgrade:** refresh your `dist/<harness>/` shell to receive the corrected recovery behavior.
+
+* `aidlc-knowledge sync` rebuilds a missing `index.json` using digest matching through symlinked project paths, preventing a newer stale duplicate record from surviving recovery.
+* When duplicate records require a digest tie-break, a present-but-refused managed source now stops the rebuild with the source path and refusal reason; a genuinely absent source retains the deterministic newest-`indexed_at` fallback.
+
 ## [2.6.69] - 2026-08-24
 
 Per-unit source review now binds the manifest and claimed source at dispatch, and sibling-repository Bolt worktrees preserve application source under root `aidlc/` and `.aidlc/` directories. **Upgrade:** refresh your `dist/<harness>/` shell; write a valid `source-manifest.json` before every per-unit workspace review request, and use `--retry-pending` to re-dispatch after any pre-verdict source change.
