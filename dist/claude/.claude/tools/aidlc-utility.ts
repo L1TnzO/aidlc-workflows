@@ -71,6 +71,7 @@ import {
   hooksHealthDir,
   isAutonomousMode,
   isPlainObject,
+  isPluginEnabled,
   isoTimestamp,
   isPackageJson,
   codekbRepoName,
@@ -724,6 +725,36 @@ function removeConsumesEntries(content: string, artifacts: ReadonlySet<string>):
     .map((entry) => entry[0]);
   const replacement = kept.length > 0 ? `consumes:\n${kept.join("")}` : "consumes: []\n";
   return content.replace(blockRe, replacement);
+}
+
+function missingRecordedContributions(
+  parsed: Record<string, unknown>,
+  record: StageContribRecord,
+): string[] {
+  const missing: string[] = [];
+  for (const field of ["produces", "sensors", "scopes", "required_sections"] as const) {
+    const recorded = record[field];
+    if (!Array.isArray(recorded) || recorded.length === 0) continue;
+    const present = new Set(
+      (Array.isArray(parsed[field]) ? parsed[field] : [])
+        .filter((value): value is string => typeof value === "string"),
+    );
+    const absent = recorded.filter((value) => !present.has(value));
+    if (absent.length > 0) missing.push(`${field}=[${absent.join(", ")}]`);
+  }
+
+  if (Array.isArray(record.consumes) && record.consumes.length > 0) {
+    const present = new Set(
+      (Array.isArray(parsed.consumes) ? parsed.consumes : [])
+        .flatMap((entry) => {
+          if (!isPlainObject(entry) || typeof entry.artifact !== "string") return [];
+          return [entry.artifact];
+        }),
+    );
+    const absent = record.consumes.filter((artifact) => !present.has(artifact));
+    if (absent.length > 0) missing.push(`consumes=[${absent.join(", ")}]`);
+  }
+  return missing;
 }
 
 // Strip every sentinel-marked prose fragment this plugin spliced. The open
@@ -2156,6 +2187,8 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
 
     const graphSlugs = new Set(graphAll.map((s) => s.slug));
     const missingEnabled: string[] = [];
+    const missingPluginStages: string[] = [];
+    const stageSources = new Map<string, { path: string; parsed: Record<string, unknown> }>();
     const stagesRoot = resolveHarnessPath(["aidlc-common", "stages"]);
     for (const phase of PHASES) {
       const dir = join(stagesRoot, phase);
@@ -2167,11 +2200,13 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
           const slug = typeof parsed.slug === "string" ? parsed.slug : f.replace(/\.md$/, "");
           const plugin = typeof parsed.plugin === "string" ? parsed.plugin : undefined;
           const stagePhase = typeof parsed.phase === "string" ? parsed.phase : phase;
+          stageSources.set(slug, { path, parsed });
           if (
             expectedEnabledBySelection({ plugin, phase: stagePhase }) &&
             !graphSlugs.has(slug)
           ) {
             missingEnabled.push(`${slug} (${path})`);
+            if (plugin) missingPluginStages.push(`${plugin}: stage ${slug}`);
           }
         } catch (e) {
           if (selected !== null) {
@@ -2201,6 +2236,62 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
           }\``
         : undefined,
     });
+
+    const missingComposition: string[] = [...missingPluginStages];
+    const sidecarAdvisories: string[] = [];
+    const dataDir = resolveHarnessPath(["tools", "data"]);
+    if (existsSync(dataDir)) {
+      for (const file of readdirSync(dataDir).filter((name) =>
+        /^plugin-contrib-.+\.json$/.test(name)
+      ).sort()) {
+        const plugin = file.replace(/^plugin-contrib-/, "").replace(/\.json$/, "");
+        if (!isPluginEnabled(plugin)) continue;
+        const sidecar = join(dataDir, file);
+        let manifest: Record<string, StageContribRecord>;
+        try {
+          const parsed = JSON.parse(readFileSync(sidecar, "utf-8"));
+          if (!isPlainObject(parsed)) throw new Error("expected a JSON object");
+          manifest = parsed as Record<string, StageContribRecord>;
+        } catch (e) {
+          sidecarAdvisories.push(`${plugin} (${sidecar}): ${errorMessage(e)}`);
+          continue;
+        }
+        for (const [target, record] of Object.entries(manifest).sort(([a], [b]) =>
+          a.localeCompare(b)
+        )) {
+          if (!isPlainObject(record)) {
+            sidecarAdvisories.push(`${plugin} (${sidecar}): target ${target} has an invalid record`);
+            continue;
+          }
+          const source = stageSources.get(target);
+          if (!source) continue;
+          const missing = missingRecordedContributions(
+            source.parsed,
+            record as StageContribRecord,
+          );
+          if (missing.length > 0) {
+            missingComposition.push(
+              `${plugin}: stage ${target} (${source.path}) missing ${missing.join("; ")}`,
+            );
+          }
+        }
+      }
+    }
+    results.push({
+      pass: missingComposition.length === 0,
+      label: missingComposition.length === 0
+        ? "Composed plugin surface: all enabled plugin stages and recorded contributions are present"
+        : `Composed plugin surface: ${missingComposition.length} missing composition item(s)`,
+      fix: missingComposition.length > 0
+        ? `${missingComposition.join("; ")} - re-run \`/aidlc plugin sync\` (or \`bun ${harnessDir()}/tools/aidlc-utility.ts plugin-sync\` with the plugin root environment set). Hook-carrying hosts self-heal on the next session start.`
+        : undefined,
+    });
+    if (sidecarAdvisories.length > 0) {
+      results.push({
+        pass: true,
+        label: `Composed plugin surface sidecars (advisory): ${sidecarAdvisories.length} unreadable or invalid sidecar(s) skipped - ${sidecarAdvisories.join("; ")}`,
+      });
+    }
 
     // Active workflows stranded by the CURRENT selection (a selection written
     // before this guard existed, or a hand-edited harness.json): every /aidlc
@@ -3160,11 +3251,35 @@ function handleDoctor(projectDir: string, flags: Record<string, string> = {}): v
     // row (see the render loop below). Fold the slug list + the compile hint into
     // the label so the operator can act on it, mirroring the MERGE_DISPATCH /
     // rule-drift advisory rows that carry their detail inline.
+    const uncompiledPluginStages: string[] = [];
+    if (uncompiledStages.length > 0) {
+      const uncompiled = new Set(uncompiledStages);
+      const stagesRoot = resolveHarnessPath(["aidlc-common", "stages"]);
+      for (const phase of PHASES) {
+        const dir = join(stagesRoot, phase);
+        if (!existsSync(dir)) continue;
+        for (const file of readdirSync(dir).filter((name) => name.endsWith(".md")).sort()) {
+          const fallbackSlug = file.replace(/\.md$/, "");
+          if (!uncompiled.has(fallbackSlug)) continue;
+          try {
+            const parsed = parseStageFrontmatter(readFileSync(join(dir, file), "utf-8"));
+            const slug = typeof parsed.slug === "string" ? parsed.slug : fallbackSlug;
+            const plugin = typeof parsed.plugin === "string" ? parsed.plugin : undefined;
+            if (plugin) uncompiledPluginStages.push(`${slug} (${plugin})`);
+          } catch {
+            // Schema validation below owns malformed frontmatter.
+          }
+        }
+      }
+    }
+    const uncompiledHint = uncompiledPluginStages.length > 0
+      ? ` - plugin-owned files ${uncompiledPluginStages.join(", ")} require \`/aidlc plugin sync\` (or \`bun ${harnessDir()}/tools/aidlc-utility.ts plugin-sync\` with the plugin root environment set); run \`bun ${harnessDir()}/tools/aidlc-graph.ts compile\` for other authored stages`
+      : ` - run \`bun ${harnessDir()}/tools/aidlc-graph.ts compile\` to include them`;
     results.push({
       pass: true,
       label: uncompiledStages.length === 0
         ? "Uncompiled stage files: 0 stage files missing from the compiled graph"
-        : `Uncompiled stage files: ${uncompiledStages.length} stage file(s) not in the compiled graph (advisory, will not execute until recompiled): ${uncompiledStages.join(", ")} - run \`bun ${harnessDir()}/tools/aidlc-graph.ts compile\` to include them`,
+        : `Uncompiled stage files: ${uncompiledStages.length} stage file(s) not in the compiled graph (advisory, will not execute until recompiled): ${uncompiledStages.join(", ")}${uncompiledHint}`,
     });
   } catch (e) {
     results.push({

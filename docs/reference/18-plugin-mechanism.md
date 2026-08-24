@@ -108,6 +108,14 @@ The steps (identical regardless of trigger):
 
 Because composition is one N-way merge (not a sequence of independent overlays), **two plugins that both contribute to the same stage are genuinely merged** — structural additions set-union, prose fragments order deterministically — rather than one silently overwriting the other. The runtime stays **read-only** with respect to composition: all merging happens at compose time, never per session. The merge edits **stage source** (not the compiled JSON), so it is **durable** across any later `aidlc-graph compile` (e.g. the rebuild-stage-graph hook) and **idempotent** — re-running on every SessionStart composes nothing new.
 
+An engine reinstall is different from a graph compile: copying a fresh
+`dist/<harness>/` overwrites the compiled graph and core stage sources, so
+plugin-owned files and sidecars may remain while graph entries and contribution
+merges disappear. Re-run `/aidlc plugin sync` after every engine upgrade; hosts
+with a compose hook also repair the surface on the next session start. The
+doctor's **Composed plugin surface** check detects both missing plugin graph
+entries and stale structural-contribution sidecars.
+
 ## 5. Selection
 
 Plugins add; the install selects. Composing a plugin copies its files into the

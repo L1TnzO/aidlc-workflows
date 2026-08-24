@@ -229,6 +229,18 @@ block. Two authoring rules follow from that:
   Only PR-branch installs are affected — recompose from a clean base, or delete
   the old block by hand, once.
 
+### Engine upgrade lifecycle
+
+An engine reinstall copies the stock `dist/<harness>/` graph and core stage
+sources over the effective install. Plugin-namespaced files and contribution
+sidecars can survive that overlay while their graph entries and structural or
+prose contribution merges disappear. Authors should make re-composition part of
+their upgrade instructions: run `/aidlc plugin sync` after every engine
+reinstall or upgrade (or start a new session on a host with the plugin compose
+hook). Composition is idempotent, so this restores the same effective surface
+without duplicating unchanged contributions. `/aidlc --doctor` reports the
+broken state as **Composed plugin surface**.
+
 ## 4. Packaging the other primitives
 
 `test-pro` ships stages, contributions, sensors, a support agent, a scope, and

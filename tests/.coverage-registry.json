@@ -6803,6 +6803,10 @@
           "mechanism": "sdk"
         },
         {
+          "file": "tests/integration/t314-plugin-reinstall-doctor.test.ts",
+          "mechanism": "cli"
+        },
+        {
           "file": "tests/unit/t103.test.ts",
           "mechanism": "cli"
         },
@@ -7026,6 +7030,10 @@
       "unitId": "aidlc-utility plugin-sync",
       "minMechanism": "cli",
       "coveredBy": [
+        {
+          "file": "tests/integration/t314-plugin-reinstall-doctor.test.ts",
+          "mechanism": "cli"
+        },
         {
           "file": "tests/unit/t231-handler-additions.test.ts",
           "mechanism": "cli"

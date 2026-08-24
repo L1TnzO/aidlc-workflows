@@ -362,8 +362,9 @@ When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** sect
 | State drift | the active intent's `aidlc-state.md` matches the last `WORKFLOW_COMPLETED` in the audit |
 | Cycle detection | `stage-graph.json` has no cycles |
 | Orphan stage files | Every slug in the graph has a matching `<phase>/<slug>.md` on disk |
-| Uncompiled stage files | Surfaces any stage `.md` on disk whose slug is not in the compiled graph, it will not execute until you run `aidlc-graph.ts compile` (advisory, never fails) |
+| Uncompiled stage files | Surfaces any stage `.md` on disk whose slug is not in the compiled graph. Plugin-owned files name `plugin sync`; other authored stages name `aidlc-graph.ts compile` (advisory, never fails) |
 | Plugin selection | Enabled plugin list, per-plugin enabled-stage counts, full-graph `enabled:false` flag agreement, and torn-selection recovery hints |
+| Composed plugin surface | Enabled plugin-owned stage files are compiled and every structural addition recorded in an enabled plugin's contribution sidecar is still present in the target stage source |
 | Plugin checks | Runs optional `tools/<plugin>-doctor.ts` scripts only for enabled plugins. Error findings fail doctor; advisory findings are visible and exported without changing the exit code |
 | Scope validation | All enabled scopes (from `.claude/scopes/*.md` after plugin selection) walk cleanly (advisories for scope-truncation gaps are expected) |
 | Schema validation | Every stage's YAML frontmatter passes `validateStageFrontmatter` |
@@ -397,6 +398,7 @@ When a workflow has issues, `--doctor` also prints a **Workflow diagnosis** sect
 ✓ Orphan stage files: 33 graph entries all have files
 ✓ Uncompiled stage files: 0 stage files missing from the compiled graph
 ✓ Enabled plugins: all enabled (no selection); enabled stage counts: aidlc=33
+✓ Composed plugin surface: all enabled plugin stages and recorded contributions are present
 ✓ Scope validation: 11 scopes valid
 ✓ Schema validation: 33/33 stages valid
 ✓ Graph references: 122 artifacts + edges resolved
@@ -824,7 +826,14 @@ bun .claude/tools/aidlc-utility.ts select-plugins aidlc,test-pro
 
 The command validates names, writes `.claude/tools/data/harness.json`, strips a newly disabled plugin's merged contributions from core stage source (structural adds via the compose-written sidecar, spliced prose via its sentinel markers; re-enabling restores them on the next session start), recompiles the full graph with disabled nodes marked `enabled:false`, prunes/regenerates stage and scope runners, and refreshes the generated SKILL.md scope/stage tables in one transaction. `aidlc` is core; omitting it disables core surfaces except the always-on Initialization stages. A change that would strand an active workflow (its scope, or a pending EXECUTE stage in its plan, owned by a plugin the new selection disables) is refused with each dependency named - complete or park the workflow first, or keep the plugin enabled.
 
-`/aidlc plugin sync` runs installed plugin compose hooks. It is safe to run repeatedly; when no plugin roots are present it exits 0 with `no installed plugins; nothing to sync`.
+`/aidlc plugin sync` runs installed plugin compose hooks. It is safe to run
+repeatedly; when no plugin roots are present it exits 0 with
+`no installed plugins; nothing to sync`. Re-run it after every engine
+reinstall or upgrade: copying a fresh `dist/<harness>/` restores the shipped
+graph and core stage sources, so previously composed plugin graph entries and
+contribution merges must be applied again. Hosts with plugin SessionStart hooks
+(Claude, Codex, Cursor, and Kiro IDE) also self-heal on the next session start;
+Kiro CLI requires the explicit sync.
 
 ### `aidlc-utility recompose` - in-flight plan flips
 

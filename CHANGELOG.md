@@ -1,6 +1,14 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.74] - 2026-08-24
+
+Plugin composition lost to an engine reinstall is now detected and documented instead of leaving plugin stages silently absent. **Upgrade:** refresh your `dist/<harness>/` shell, then run `/aidlc plugin sync` for every installed plugin; Claude, Codex, Cursor, and Kiro IDE can also re-compose on the next session start.
+
+* `/aidlc --doctor` now fails the **Composed plugin surface** check when an enabled plugin-owned stage is absent from the compiled graph or an enabled plugin's contribution sidecar records structural additions missing from the target stage source.
+* The **Uncompiled stage files** advisory now directs plugin-owned files to `plugin sync` while retaining `aidlc-graph.ts compile` for other authored stages.
+* The install, CLI, troubleshooting, plugin-authoring, and plugin-mechanism guides now make plugin re-composition an explicit engine upgrade step.
+
 ## [2.6.68] - 2026-08-24
 
 Summary-confirmation receipts now bind to the semantic questions and summary content the human reviewed while allowing the required post-generation assumption section. The contract is versioned, preserves legacy receipt verification, and reports an actionable recovery path for invalidated confirmations. **Upgrade:** refresh your `dist/<harness>/` shell so the scoped receipt, Markdown visibility, and recovery contracts stay aligned.
