@@ -1,6 +1,13 @@
 # Changelog
 All notable changes to this project will be documented in this file.
 
+## [2.6.78] - 2026-08-24
+
+Lone-repository CodeKB scope fingerprints now avoid Git's unreliable combination of narrow positive pathspecs and unrelated exclusions, and reject fingerprints that contain no files. **Upgrade:** refresh your `dist/<harness>/` shell before minting or checking CodeKB scope fingerprints.
+
+* Lone-repo `codekb-scope-diff` no longer mints or compares the empty Git tree when a narrow analyzed scope is paired with the framework-owned `aidlc` exclusion.
+* Scopes that stage zero paths now mint `unknown` and report `UNVERIFIED` during status checks, never a false `CURRENT`.
+
 ## [2.6.70] - 2026-08-24
 
 Bugfix and refactor workflows now carry verified changes through the existing deployment path instead of stopping after Build and Test. **Upgrade:** refresh your `dist/<harness>/` shell to pick up the expanded scope grids, deployment fallback, and skip-provenance fix.
